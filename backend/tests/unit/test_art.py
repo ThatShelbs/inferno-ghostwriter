@@ -76,3 +76,11 @@ def test_band_is_centre_five_by_two() -> None:
     top, bottom = band(1600, 900)
     assert (top, bottom) == (130, 770)
     assert all(len(line) < 200 for line in ENGINES.values())
+
+
+def test_weaker_engines_come_last_and_say_so() -> None:
+    from inferno_ghostwriter.images.art import PREFERRED, WEAKER
+
+    assert list(ENGINES) == [*PREFERRED, *WEAKER]
+    assert set(WEAKER) == {"network_mesh", "rings"}
+    assert all(ENGINES[k].startswith("Weaker") for k in WEAKER)

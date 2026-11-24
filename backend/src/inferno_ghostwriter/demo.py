@@ -467,8 +467,6 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
         return body_ideas_payload(prompt)
     if name == "MemeStagingEdit":
         return meme_staging_edit_payload(prompt)
-    if name == "SceneSpec":
-        return scene_spec_payload(prompt)
     if name == "ChartSpec":
         return {"vega_lite_json": CHART_SPEC, "alt": "Bar chart", "caption": "Accuracy by chart type", "data_is_illustrative": True}
     if name == "PostBrief":
@@ -966,29 +964,6 @@ def meme_ideas_payload(prompt: str, is_showcase: bool = False) -> dict[str, Any]
         "concepts": concepts,
         "chosen": 0,
         "why": "It pays off the post's main argument in one glance.",
-    }
-
-
-DEMO_SCENE_OBJECT = (
-    '<circle cx="300" cy="260" r="200" fill="#ed6925"/>'
-    '<path d="M300,260 L300,60 A200,200 0 0 1 473,360 Z" fill="#f7d13d"/>'
-    '<path d="M300,260 L473,360 A200,200 0 0 1 200,433 Z" fill="#cf4446"/>'
-    '<circle cx="300" cy="260" r="200" fill="none" stroke="#14101f" stroke-width="8"/>'
-)
-
-
-def scene_spec_payload(prompt: str) -> dict[str, Any]:
-    """A visual-metaphor opener: the ghost stares, shocked, at a pie chart that will not compare."""
-    return {
-        "layout": "hero_left",
-        "backdrop": "plain",
-        "tone": "",
-        "characters": [{"kind": "ghost", "expression": "shocked", "pose": "point", "slot": "left", "size": "large"}],
-        "props": [],
-        "object_svg": DEMO_SCENE_OBJECT,
-        "labels": [{"text": "Which is bigger?", "slot": "object"}],
-        "alt": "The Inferno Ghostwriter ghost points, shocked, at a pie chart whose slices look the same size.",
-        "caption": "Spot the difference. You can't.",
     }
 
 

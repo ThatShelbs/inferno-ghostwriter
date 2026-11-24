@@ -24,8 +24,9 @@ from inferno_ghostwriter.images.palettes import Scheme
 
 Engine = Callable[[DataArtSpec, Scheme, int, int, int], str]
 
+# The preferred engines come first; the weaker ones (``WEAKER``) are listed last and say so, so Claude picks them only
+# when nothing else fits the subject. Prompts list engines in this order.
 ENGINES: dict[str, str] = {
-    "network_mesh": "A glowing node-and-edge mesh rolling away in perspective (networks, graphs, connected systems).",
     "fan_streams": "A few bundles of fine threads fanning out into a field of data pixels "
     "(inputs becoming features, classification, pipelines). inputs = bundles, outputs = field bands.",
     "fluid_ribbons": "Thick swirling paint ribbons around vortices (creativity, generative models, messy data, turbulence). "
@@ -34,10 +35,13 @@ ENGINES: dict[str, str] = {
     "particle_wave": "Layered waves of glowing particles flowing across the frame (signals, time series, flow, streaming). "
     "inputs = strands.",
     "glow_candles": "Candlesticks glowing in layers of depth with bokeh (markets, metrics, volatility, forecasting).",
-    "rings": "A tilted wheel of fanned slivers sweeping the palette in concentric rings "
-    "(categories, spectra, cycles, the full range). outputs = rings.",
+    "network_mesh": "Weaker, last resort: a glowing node-and-edge mesh in perspective (networks, graphs, connected systems).",
+    "rings": "Weaker, last resort: a tilted wheel of fanned slivers in concentric rings (categories, spectra, cycles). outputs = rings.",
 }
-"""Each engine with the one line Claude reads when choosing."""
+"""Each engine with the one line Claude reads when choosing, preferred engines first."""
+WEAKER = ("network_mesh", "rings")
+"""Engines that draw less striking pieces: kept, listed last, picked only when nothing else fits."""
+PREFERRED = tuple(k for k in ENGINES if k not in WEAKER)
 
 _DRAW: dict[str, Engine] = {
     "network_mesh": network_mesh,
@@ -68,6 +72,8 @@ def render_art(spec: DataArtSpec, scheme: Scheme, *, width: int = 1600, height: 
 
 __all__ = [
     "ENGINES",
+    "PREFERRED",
+    "WEAKER",
     "ArtPalette",
     "DataArtSpec",
     "EngineId",

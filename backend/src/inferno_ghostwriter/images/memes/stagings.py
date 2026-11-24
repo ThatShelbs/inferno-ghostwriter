@@ -14,12 +14,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from inferno_ghostwriter.images.kit import Character
+from inferno_ghostwriter.images.figures import FigureColors
+from inferno_ghostwriter.images.figures.base import fmt as num
+from inferno_ghostwriter.images.figures.base import limb
+from inferno_ghostwriter.images.figures.line import W as LINE_W
 from inferno_ghostwriter.images.kit import props as kp
-from inferno_ghostwriter.images.kit.face import EXPRESSIONS
 from inferno_ghostwriter.images.kit.props import Stage
-from inferno_ghostwriter.images.kit.rig import ACCESSORIES, KINDS, POSES, PROPS
-from inferno_ghostwriter.images.memes.cast import draw
+from inferno_ghostwriter.images.memes.cast import ACCESSORIES, EXPRESSIONS, POSES, PROPS, Character, colors_for, draw, kind_of
 from inferno_ghostwriter.images.memes.formats import Box, MemeFormat
 
 # One cast pick per role: kind plus optional expression / accessory overrides (validated).
@@ -37,8 +38,7 @@ class CastRole:
 def _pick(cast: Cast, role: str, default: str) -> dict[str, str]:
     raw = cast.get(role) or {}
     # People play every role, as in the original meme; the ghost or robot only when cast on purpose.
-    picked = raw.get("kind", "")
-    kind = picked if picked in ("ghost", "robot") else "person"
+    kind = kind_of(raw.get("kind"))
     out: dict[str, str] = {"kind": kind}
     if raw.get("expression") in EXPRESSIONS:
         out["expression"] = raw["expression"]
@@ -188,7 +188,7 @@ def distracted(fmt: MemeFormat, words: dict[str, str], cast: Cast, st: Stage) ->
     body = [kp.street(st, box)]
     body.append(
         draw(
-            ch(cast, "shiny", "ghost", "beaming", "wave", "right", accessory="sunglasses", variant=2),
+            ch(cast, "shiny", "ghost", "beaming", "wave", "right", variant=2),
             w * 0.17,
             h * 0.93,
             h * 0.6,
@@ -209,28 +209,42 @@ def two_buttons(fmt: MemeFormat, words: dict[str, str], cast: Cast, st: Stage) -
     out = [kp.wash(st, top, kp.gradient_rect(st, top, "#8a97ab", panel))]
     out.append(kp.big_button(st, 300, 305))
     out.append(kp.big_button(st, 780, 275))
-    c = ch(cast, "chooser", "ghost", "sweating", "stand")
-    # Only a hand reaches up from the bottom edge, its finger hovering between the buttons.
-    from inferno_ghostwriter.images.kit.style import coat as kit_coat
-
-    k = kit_coat(c.kind, st.sch, st.style, c.variant)
-    color = k.second if c.kind == "person" else mix_hex(k.top, k.bottom, 0.4)
-    hand = k.top if c.kind == "person" else color
-    arm = st.p.hose("M600,720 C610,640 560,560 545,500", color, 70)
-    arm += st.p.shape('<circle cx="543" cy="478" r="44"', hand, mix_hex(hand, "#000000", 0.1))
-    arm += st.p.hose("M548,450 L552,392", hand, 26)
-    for dx, dy in ((470, 430), (626, 420), (500, 520)):
-        arm += f'<path d="M{dx},{dy} c8,12 9,22 0,25 c-9,-3 -8,-13 0,-25 z" fill="#9bd8ff" stroke="#3a86c8" stroke-width="2"/>'
-    out.append(clip(top, arm, f"{st.prefix}-tbh"))
+    c = ch(cast, "chooser", "person", "sweating", "wipe")
+    # The man in blue is his own look (a person cast as the chooser); a ghost or robot keeps its own colors.
+    man = Character(
+        c.kind, "sweating", "wipe", "left", c.accessory, "none", c.variant, "sweater" if kind_of(c.kind) == "person" else c.label
+    )
+    out.append(clip(top, _reaching_hand(colors_for(man, st.sch), kind_of(c.kind)), f"{st.prefix}-tbh"))
     bottom = (0, 700, 1080, 600)
     body = [kp.wash(st, bottom, kp.gradient_rect(st, bottom, "#fde2b8", "#f7c98a"))]
-    body.append(
-        draw(
-            Character(c.kind, "sweating", "wipe", "right", c.accessory, "cloth", c.variant), 540, 700 + 980, 1080, sch=st.sch, look=st.look
-        ).svg
-    )
+    # Chest up, a little off centre, facing left so the cloth hand is on the far side and his worried face reads.
+    body.append(draw(man, 560, 700 + 1080, 1060, sch=st.sch, look=st.look).svg)
     out.append(clip(bottom, "".join(body), f"{st.prefix}-tbs"))
     return "".join(out)
+
+
+def _reaching_hand(colors: FigureColors, kind: str) -> str:
+    """The Two Buttons hand reaching up from the bottom edge, finger hovering between the buttons, drawn in figure
+    units at the same scale and in the same colors as the sweating man below, so the arm is visibly his."""
+    s = 1060 / 205  # the bottom panel's figure scale
+    ink, w = colors.ink, LINE_W
+    skin = colors.skin if kind == "person" else (colors.ghost if kind == "ghost" else "#eef0f6")
+    sleeve = colors.shirt if kind == "person" else skin
+    # Local units: x = 0 at the hand, y up is negative; the arm enters from the bottom edge (y ~ +44 at 700 px).
+    arm = [(10.0, 50.0), (6.0, 24.0), (0.0, 0.0)]
+    parts = [limb(arm, 10.5, skin, ink, w)]
+    if kind == "person":
+        parts.append(limb([(10.0, 50.0), (8.6, 40.0)], 14, sleeve, ink, w))  # the blue cuff at the frame edge
+    st_ = f'stroke="{ink}" stroke-width="{num(w)}" stroke-linejoin="round"'
+    parts.append(f'<rect x="-3.2" y="-22" width="6.4" height="18" rx="3.2" fill="{skin}" {st_}/>')  # the finger
+    parts.append(f'<ellipse cx="0" cy="-2" rx="7.8" ry="8.4" fill="{skin}" {st_}/>')  # the fist
+    parts.append(f'<path d="M-6 -4 Q-1 -1 5 -4" fill="none" stroke="{ink}" stroke-width="1.2" stroke-opacity="0.5"/>')
+    hand = f'<g transform="translate(548 470) scale({num(s)})">{"".join(parts)}</g>'
+    drops = "".join(
+        f'<path d="M{dx},{dy} c8,12 9,22 0,25 c-9,-3 -8,-13 0,-25 z" fill="#9bd8ff" stroke="#3a86c8" stroke-width="2"/>'
+        for dx, dy in ((470, 430), (626, 420), (500, 520))
+    )
+    return hand + drops
 
 
 def midwit(fmt: MemeFormat, words: dict[str, str], cast: Cast, st: Stage) -> str:
@@ -434,7 +448,7 @@ def comic(fmt: MemeFormat, words: dict[str, str], cast: Cast, st: Stage, panels:
         ]
         close = pick.get("shot") == "close_up" and len(chars) == 1
         for k, c in enumerate(chars):
-            kind = _id(c.get("kind"), KINDS, "ghost")
+            kind = kind_of(c.get("kind"), "ghost")
             role = c.get("role") or kind
             # The same role keeps the same variant in every panel, so a character looks the same throughout.
             variant = int(c.get("variant", 0)) if str(c.get("variant", "0")).isdigit() else 0
@@ -484,30 +498,33 @@ COMICS = ("comic_strip_3", "comic_grid_4")
 
 # Who can be cast in each format (role -> default kind, hint). Formats not listed have one role, "star".
 ROLES: dict[str, tuple[CastRole, ...]] = {
-    "right_right": (CastRole("confident", "ghost", "makes the grand claim (left)"), CastRole("hopeful", "ghost", "asks 'right?' (right)")),
-    "this_is_fine": (CastRole("calm_one", "dog", "sits calmly in the fire"),),
-    "this_is_fine_2": (CastRole("calm_one", "dog", "sits calmly in the fire"),),
-    "nope_yep": (CastRole("chooser", "ghost", "rejects, then approves"),),
-    "pointing_twins": (CastRole("twin", "ghost", "both identical twins"),),
+    "right_right": (
+        CastRole("confident", "person", "makes the grand claim (left)"),
+        CastRole("hopeful", "person", "asks 'right?' (right)"),
+    ),
+    "this_is_fine": (CastRole("calm_one", "person", "sits calmly in the fire"),),
+    "this_is_fine_2": (CastRole("calm_one", "person", "sits calmly in the fire"),),
+    "nope_yep": (CastRole("chooser", "person", "rejects, then approves"),),
+    "pointing_twins": (CastRole("twin", "person", "both identical twins"),),
     "distracted": (
-        CastRole("distracted", "ghost", "the one turning to look"),
-        CastRole("shiny", "ghost", "the shiny passer-by"),
-        CastRole("partner", "ghost", "the outraged partner"),
+        CastRole("distracted", "person", "the one turning to look"),
+        CastRole("shiny", "person", "the shiny passer-by"),
+        CastRole("partner", "person", "the outraged partner"),
     ),
-    "two_buttons": (CastRole("chooser", "ghost", "sweats over the choice"),),
+    "two_buttons": (CastRole("chooser", "person", "sweats over the choice"),),
     "midwit_bell_curve": (
-        CastRole("beginner", "ghost", "left tail"),
-        CastRole("midwit", "ghost", "the overthinker at the peak"),
-        CastRole("expert", "ghost", "the serene expert"),
+        CastRole("beginner", "person", "left tail"),
+        CastRole("midwit", "person", "the overthinker at the peak"),
+        CastRole("expert", "person", "the serene expert"),
     ),
-    "gru_plan": (CastRole("planner", "ghost", "presents the plan"),),
-    "always_has_been": (CastRole("realizer", "ghost", "the shocked astronaut"), CastRole("knower", "ghost", "the calm astronaut behind")),
-    "change_my_mind": (CastRole("debater", "ghost", "sits behind the sign"),),
-    "is_this_a": (CastRole("misjudger", "ghost", "mislabels the butterfly"),),
-    "shocked_strip": (CastRole("decider", "ghost", "makes the choice, then is shocked"),),
-    "classic_caption": (CastRole("star", "ghost", "the reaction (pick an expression)"),),
-    "panik_kalm_panik": (CastRole("reactor", "ghost", "panics, calms, panics"),),
-    "running_away_balloon": (CastRole("chaser", "ghost", "reaches for the balloon"), CastRole("holder", "ghost", "holds them back")),
+    "gru_plan": (CastRole("planner", "person", "presents the plan"),),
+    "always_has_been": (CastRole("realizer", "person", "the shocked astronaut"), CastRole("knower", "person", "the calm astronaut behind")),
+    "change_my_mind": (CastRole("debater", "person", "sits behind the sign"),),
+    "is_this_a": (CastRole("misjudger", "person", "mislabels the butterfly"),),
+    "shocked_strip": (CastRole("decider", "person", "makes the choice, then is shocked"),),
+    "classic_caption": (CastRole("star", "person", "the reaction (pick an expression)"),),
+    "panik_kalm_panik": (CastRole("reactor", "person", "panics, calms, panics"),),
+    "running_away_balloon": (CastRole("chaser", "person", "reaches for the balloon"), CastRole("holder", "person", "holds them back")),
 }
 
 

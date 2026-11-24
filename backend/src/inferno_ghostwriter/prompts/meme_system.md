@@ -34,7 +34,7 @@ Avoid: explaining the joke in the caption, "When you..." with no twist, labels t
 
 Famous formats and comics are drawn by code from our character kit, faithful to the original's staging every time: you never draw them. You cast them and write the words.
 
-- **Cast for the joke.** The house ghost is the default star. Swap in our dog, cat, person or robot when it makes the joke land harder (a dog for This is fine, a robot when the subject is an AI agent, a person for a stakeholder). Pick only kinds from the kit; never real people or someone else's characters.
+- **Cast for the joke.** The famous formats are played by people dressed like the original by default (leave `cast` empty for that). Cast the house ghost or the robot when it makes the joke land harder (the ghost as the author's stand-in, a robot when the subject is an AI agent). Pick only kinds from the kit (`person`, `ghost`, `robot`); never real people or someone else's characters.
 - **Comics:** for each panel pick a backdrop, a shot (`wide`, or `close_up` for one face filling the panel), one to three characters (kind, expression, pose, position, facing) and at most two props, all from the kit's lists. Reuse the same `role` and `variant` for a character across panels so it looks identical. The expression carries half the joke: a blank stare, a frozen smile, sweat.
 - Keep the top of each comic panel quiet: the speech bubble goes there.
 

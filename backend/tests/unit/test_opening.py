@@ -265,20 +265,33 @@ class NoEyesLLM(FakeLLM):
         return await super().structured(task=task, schema=schema, **kwargs)
 
 
-async def test_a_visual_metaphor_is_staged_from_the_kit_in_a_house_scheme() -> None:
-    llm = FakeLLM()
+async def test_a_visual_metaphor_is_claude_svg_with_library_figures_in_a_house_scheme() -> None:
+    from inferno_ghostwriter.images.specs import SvgSpec
+
+    class FigureLLM(FakeLLM):
+        """Draws the metaphor with one library figure, as Claude does when a person helps the idea."""
+
+        async def structured(self, *, task: str, schema: type[BaseModel], **kwargs: Any) -> Any:
+            result = await super().structured(task=task, schema=schema, **kwargs)
+            if schema is SvgSpec and task == "opening editorial drawing":
+                svg = result.svg.replace("</svg>", '<use href="#fig-bean-pointing" x="100" y="300" width="160" height="300"/></svg>')
+                return result.model_copy(update={"svg": svg})
+            return result
+
+    llm = FigureLLM()
     room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
     result = await room.make("", context(), ART, style="editorial")
     state = load_state(result.spec)
-    assert state and state["style"] == "editorial" and state["scene"]["characters"][0]["kind"] == "ghost"
-    assert result.provider == "claude-scene" and state["scheme"].split(":")[0] in ("inferno", "magma", "viridis")
-    prompt = next(c for c in llm.calls if c["task"] == "opening scene")["prompt"]
-    assert "Layouts:" in prompt and "Expressions:" in prompt and "palette on a" in prompt
+    assert state and state["style"] == "editorial" and result.provider == "claude-svg"
+    assert state["scheme"].split(":")[0] in ("inferno", "magma", "viridis")
+    prompt = next(c for c in llm.calls if c["task"] == "opening editorial drawing")["prompt"]
+    assert "fig-<style>-<pose>" in prompt and "never draw people or characters yourself" in prompt
+    # The figure's symbol is added after the lint, so the drawing renders whole.
+    assert '<symbol id="fig-bean-pointing"' in state["svg"]
     with Image.open(io.BytesIO(result.png)) as img:
         assert img.size == (1600, 900)
-    # An edit restages the stored scene.
-    edited = await room.edit(result.spec, "Make the ghost look smug", context(), ART)
-    assert "The current scene to edit" in llm.calls[-1]["prompt"] and load_state(edited.spec)
+    edited = await room.edit(result.spec, "Make the figure point left", context(), ART)
+    assert "The current SVG to edit" in llm.calls[-1]["prompt"] and load_state(edited.spec)
 
 
 async def test_an_opening_meme_is_pitched_by_the_meme_room_as_an_opener() -> None:

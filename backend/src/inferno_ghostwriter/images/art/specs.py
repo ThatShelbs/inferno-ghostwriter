@@ -6,13 +6,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-EngineId = Literal["network_mesh", "fan_streams", "fluid_ribbons", "radial_digits", "particle_wave", "glow_candles", "rings"]
+EngineId = Literal["fan_streams", "fluid_ribbons", "radial_digits", "particle_wave", "glow_candles", "network_mesh", "rings"]
 
 
 class DataArtSpec(BaseModel):
     """One piece of generative data art. Every field but ``engine`` has a smart default."""
 
-    engine: EngineId = Field(description="Which engine draws the piece (see ENGINES).")
+    engine: EngineId = Field(description="Which engine draws the piece (see ENGINES; prefer any engine over network_mesh and rings).")
     seed: int = Field(default=1, ge=0, le=2**31 - 1, description="Same seed, same picture; change it for a variation.")
     density: float = Field(default=0.6, ge=0.0, le=1.0, description="How much there is: 0 = sparse and airy, 1 = rich and packed.")
     focus: float = Field(

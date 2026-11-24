@@ -3,7 +3,7 @@ The author wants to change this meme:
 $instruction
 </instruction>
 
-The format (drawn by code from the character kit; you change words, casting and comic panels, never drawings):
+The format (drawn by code from our cast and scene kit; you change words, casting and comic panels, never drawings):
 <format>
 $spec
 </format>

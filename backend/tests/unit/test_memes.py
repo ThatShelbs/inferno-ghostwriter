@@ -154,3 +154,44 @@ def test_the_classic_right_right_format_and_other_new_classics_are_offered() -> 
     assert right is not None and len(right.slots) == 4 and "Right?" in right.slots[3].hint
     p3 = right.slot("p3")
     assert p3 is not None and p3.optional
+
+
+def test_the_cast_vocabulary_keeps_older_picks_working() -> None:
+    from inferno_ghostwriter.images.kit.props import default_stage
+    from inferno_ghostwriter.images.memes.cast import EXPRESSIONS, KINDS, POSES, Character, draw, kind_of
+    from inferno_ghostwriter.images.memes.cast import menu as cast_menu
+    from inferno_ghostwriter.images.memes.generate import _kit_menu
+    from inferno_ghostwriter.images.memes.stagings import stage_art
+
+    assert KINDS == ("person", "ghost", "robot")
+    assert kind_of("dog") == kind_of("cat") == "person" and kind_of("ghost") == "ghost" and kind_of("alien") == "person"
+    text = cast_menu()
+    assert all(f"`{k}`" in text for k in (*KINDS, *EXPRESSIONS, *POSES)) and "`dog`" not in text
+    assert text in _kit_menu() and "Backdrops:" in _kit_menu()
+    # Every expression and pose draws for every kind, including a stored dog with an old accessory and hand prop.
+    for i, expression in enumerate(EXPRESSIONS):
+        for kind in (*KINDS, "dog"):
+            pose = list(POSES)[i % len(POSES)]
+            assert "<use " in draw(Character(kind, expression, pose, "left", "bowler", "mug", i), 100, 300, 200).svg
+    # A stored meme state that cast the dog and old poses still stages.
+    fmt = get_format("this_is_fine")
+    assert fmt is not None
+    art = stage_art(fmt, {}, {"calm_one": {"kind": "dog", "expression": "content", "accessory": "bowler"}}, default_stage())
+    assert "fig-line" in art
+    comic = get_format("comic_strip_3")
+    assert comic is not None
+    panels = [{"backdrop": "office", "characters": [{"kind": "cat", "expression": "love", "pose": "sit_type", "prop": "wrench"}]}]
+    assert "fig-line" in stage_art(comic, {}, {}, default_stage(), panels)
+
+
+def test_two_buttons_shows_the_sweating_mans_face_and_a_matching_arm() -> None:
+    from inferno_ghostwriter.images.kit.props import default_stage
+    from inferno_ghostwriter.images.memes.cast import ROLE_LOOKS
+    from inferno_ghostwriter.images.memes.stagings import stage_art
+
+    fmt = get_format("two_buttons")
+    assert fmt is not None
+    art = stage_art(fmt, {}, {}, default_stage())
+    blue = ROLE_LOOKS["sweater"].shirt
+    assert art.count(blue) >= 2  # the man's shirt and the cuff of the arm reaching for the buttons
+    assert "fig-line-nervous" in art and "-left" in art  # facing left: the cloth hand is on the far side of his face

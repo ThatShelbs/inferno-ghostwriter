@@ -5,8 +5,8 @@
 2. **Rank** (``judge.rank_pitches``): one judge call scores every concept (story fit, clarity, surprise) and may
    veto one; a concept whose ``anchor`` quote is not in the post ranks last.
 3. **Research** (data styles only): the winning claim's numbers are looked up with web search.
-4. **Build**: a kit-staged scene (visual metaphor: kit characters and props plus one custom object Claude draws,
-   ``scene.py``), Claude SVG (data art, receipt; linted and snapped to the scheme), a code template (cheat sheet,
+4. **Build**: Claude SVG (visual metaphor and receipt; linted, snapped to the scheme, library figures injected), a
+   data-art engine (``images/art``), a code template (cheat sheet,
    versus, big number, framework, chart) or the meme room. Every number a data opener prints must pass ``facts.check``.
    A fresh opener builds its best ``image_candidates`` concepts at once.
 5. **Judge the pictures** (``judge.judge_sheet``): one vision call sees every candidate next to the author's
@@ -33,6 +33,8 @@ from typing import Any
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.figures import FigureColors, catalog_text
+from inferno_ghostwriter.images.figures import inject as inject_figures
 from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker, MemeResult
@@ -40,15 +42,13 @@ from inferno_ghostwriter.images.memes.generate import clip_post
 from inferno_ghostwriter.images.memes.generate import load_state as load_meme_state
 from inferno_ghostwriter.images.opening import facts, templates
 from inferno_ghostwriter.images.opening.canvas import SAFE_BOTTOM, SAFE_TOP
-from inferno_ghostwriter.images.opening.scene import compose_scene, scene_menu
 from inferno_ghostwriter.images.opening.specs import (
     OpeningBuild,
     OpeningConcept,
     OpeningIdeas,
-    SceneSpec,
 )
 from inferno_ghostwriter.images.opening.styles import AUTO, BY_ID, FALLBACK, STYLES, OpeningStyle, get_style
-from inferno_ghostwriter.images.palettes import DARK_SURFACES, LIGHT_SURFACES, Scheme, brand_scheme, from_id, house_ramp, scheme
+from inferno_ghostwriter.images.palettes import Scheme, brand_scheme, from_id, house_ramp, scheme
 from inferno_ghostwriter.images.palettes import pick as pick_colors
 from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
 from inferno_ghostwriter.images.remix import dimensions_for, edit_note, variation_for
@@ -74,7 +74,8 @@ NOT_AN_OPENING = "This image was made before opening styles existed; click New i
 
 SVG_RULES = {
     "editorial": (
-        "An imaginative editorial illustration that acts out the post's central mechanism as one physical scene. Make the "
+        "An imaginative editorial illustration that acts out the post's central mechanism as one physical scene, in a clean "
+        "flat-vector style with soft shadows and one focal point. Make the "
         "metaphor specific to this post; up to four short labels (one or two words each, from the post) are allowed only "
         "where they make the metaphor click, such as the buckets of a plinko board. No headline or title text."
     ),
@@ -494,8 +495,6 @@ class OpeningRoom:
         """The picture as built, for a change that must keep the rest of it."""
         if built_state.get("art"):
             return f"\nThe current settings to change:\n<current>\n{json.dumps(built_state['art'], indent=1)}\n</current>\n"
-        if built_state.get("scene"):
-            return f"\nThe current scene to change:\n<current>\n{json.dumps(built_state['scene'], indent=1)}\n</current>\n"
         if built_state.get("svg"):
             return f"\nThe current SVG to change:\n<current>\n{built_state['svg']}\n</current>\n"
         if built_state.get("build"):
@@ -530,8 +529,6 @@ class OpeningRoom:
             note += f"\nThe current settings to edit:\n<current>\n{json.dumps(state['art'], indent=1)}\n</current>\n"
         elif style.builder == "svg":
             note += f"\nThe current SVG to edit:\n<current>\n{state.get('svg', '')}\n</current>\n"
-        elif style.builder == "scene" and state.get("scene"):
-            note += f"\nThe current scene to edit:\n<current>\n{json.dumps(state['scene'], indent=1)}\n</current>\n"
         else:
             note += f"\nThe current build to edit:\n<current>\n{json.dumps(state.get('build') or {}, indent=1)}\n</current>\n"
         sch = scheme_of(state, art.palette)
@@ -550,8 +547,6 @@ class OpeningRoom:
             return edit_note(art.edits, json.dumps(state["art"], indent=1), what="settings")
         if style.builder == "svg":
             return edit_note(art.edits, str(state.get("svg") or ""), what="svg") if state.get("svg") else ""
-        if style.builder == "scene" and state.get("scene"):
-            return edit_note(art.edits, json.dumps(state["scene"], indent=1), what="scene")
         build = state.get("build")
         return edit_note(art.edits, json.dumps(build, indent=1), what="build") if build else ""
 
@@ -773,8 +768,6 @@ class OpeningRoom:
             if style.builder == "meme":
                 previous = str(state.get("meme") or "") if redraw and state.get("style") == "meme" and not meme_format else ""
                 return await self._build_meme(concept, previous, ctx, art, usage, meme_format)
-            if style.builder == "scene":
-                return await self._build_scene(style, concept, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             if style.id == "data_art":
                 return await self._build_art(style, concept, state, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             if style.builder == "svg":
@@ -787,72 +780,6 @@ class OpeningRoom:
             # errors are not caught: they would fail every concept the same way.
             log.info("Opening %s could not be built: %s", style.id, exc)
             return None
-
-    async def _build_scene(
-        self,
-        style: OpeningStyle,
-        concept: OpeningConcept,
-        ctx: OpeningContext,
-        art: ArtDirection,
-        sch: Scheme,
-        *,
-        redraw: bool,
-        fix: str,
-        usage: UsageSink | None,
-    ) -> _Built:
-        """A visual metaphor staged from the kit: Claude casts and arranges it (one SceneSpec call), code draws it."""
-        allowed = dimensions_for("hero", style.id)
-        prompt = render(
-            "opening_build_scene",
-            title=ctx.title,
-            concept=_concept_text(concept),
-            colors=sch.describe(),
-            visual_style=art.visual_style,
-            brand=art.brand,
-            variation=(
-                (variation_for(art, allowed) or "This is a redraw: keep the idea but give it a fresh layout, cast and staging.")
-                if redraw
-                else ""
-            ),
-            fix=fix,
-            kit=scene_menu(),
-            image_guidance=art.image_guidance,
-            post=clip_post(ctx.markdown, 5000, tail=0),
-        )
-
-        async def ask(note: str) -> SceneSpec:
-            return await self.llm.structured(
-                task="opening scene",
-                system=self.system,
-                prompt=prompt + note,
-                schema=SceneSpec,
-                effort=self.settings.effort_images,
-                max_tokens=16000,
-                usage=usage,
-            )
-
-        used = {"scheme": sch.id}
-
-        def draw(made: SceneSpec, last: bool) -> tuple[bytes, int, int]:
-            colors = sch
-            if made.tone in ("dark", "light") and colors.ramp_id != "brand" and (made.tone == "dark") != colors.dark:
-                colors = scheme(colors.ramp_id, (DARK_SURFACES if made.tone == "dark" else LIGHT_SURFACES)[0])
-            png, width, height, problems = compose_scene(made, colors)
-            if problems and not last:
-                raise ImageProviderError("\n".join(problems))
-            used["scheme"] = colors.id
-            return png, width, height
-
-        made, (png, width, height) = await draw_with_retry(ask, draw)
-        return _Built(
-            png,
-            width,
-            height,
-            "claude-scene",
-            made.alt,
-            made.caption,
-            {"style": style.id, "template": "", "svg": None, "build": None, "scene": made.model_dump(), "scheme": used["scheme"]},
-        )
 
     async def _build_art(
         self,
@@ -930,6 +857,8 @@ class OpeningRoom:
                 "buckets), do not draw them: translate each into abstract structure (coins become particles, a flip becomes a "
                 "stream splitting in two, buckets become lanes) and keep the subject only as a subtle hint.\n"
             )
+        if style.id == "editorial":
+            fix += "\n" + catalog_text() + "\n"
         prompt = render(
             "opening_build_svg",
             style_label=style.label,
@@ -967,7 +896,8 @@ class OpeningRoom:
             )
             if report.problems and not last:
                 raise ImageProviderError("\n".join(report.problems))
-            made.svg = report.svg
+            # Library figures are added after the color snap, so skin and hair keep their natural tones.
+            made.svg = inject_figures(report.svg, FigureColors.from_scheme(sch))
             png, width, height = svg_to_png(made.svg, width=1600)
             if not _png_aspect_ok(width, height):
                 raise ImageProviderError("Use viewBox `0 0 1600 900`: the opening image must be 16:9.")

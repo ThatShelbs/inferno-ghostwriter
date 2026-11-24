@@ -27,6 +27,8 @@ from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
 from inferno_ghostwriter.images.diagrams import TEMPLATES, DiagramSpec, render_diagram_png
 from inferno_ghostwriter.images.diagrams import menu as diagram_menu
+from inferno_ghostwriter.images.figures import FigureColors, catalog_text
+from inferno_ghostwriter.images.figures import inject as inject_figures
 from inferno_ghostwriter.images.judge import judge_sheet
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import Scheme
@@ -242,6 +244,8 @@ class BodyRoom:
             builds_on=ctx.builds_on,
             context=ctx.context,
         )
+        if (idea or {}).get("figures") == "simple" or kind == "illustration":
+            prompt += "\n" + catalog_text() + "\n"
         if ctx.reference is not None:
             prompt += (
                 "\nThe author attached the image shown as a style reference: match its look (layout style, color use, "
@@ -264,21 +268,31 @@ class BodyRoom:
             template_line=f"`{t.id}`: {t.name}. Use when {t.use_when}. Set `diagram.template` to `{t.id}`.",
             context=ctx.context,
         )
-        return await self.fill_diagram(template, prompt, ctx.scheme, usage)
+        if ctx.reference is not None:
+            prompt += "\nThe author attached the image shown as a style reference: match its emphasis and density, not its content.\n"
+        return await self.fill_diagram(template, prompt, ctx.scheme, usage, reference=ctx.reference)
 
-    async def fill_diagram(self, template: str, prompt: str, scheme: Scheme | None, usage: UsageSink | None) -> Drawn:
+    async def fill_diagram(
+        self, template: str, prompt: str, scheme: Scheme | None, usage: UsageSink | None, *, reference: bytes | None = None
+    ) -> Drawn:
         from inferno_ghostwriter.images.palettes import scheme as house_scheme
 
         async def ask(note: str) -> DiagramDesign:
-            return await self.llm.structured(
-                task="diagram design",
-                system=self.system,
-                prompt=prompt + note,
-                schema=DiagramDesign,
-                effort=self.settings.effort_images,
-                max_tokens=8000,
-                usage=usage,
-            )
+            kwargs: dict[str, Any] = {
+                "task": "diagram design",
+                "system": self.system,
+                "prompt": prompt + note,
+                "schema": DiagramDesign,
+                "effort": self.settings.effort_images,
+                "max_tokens": 8000,
+                "usage": usage,
+            }
+            if reference is None:
+                return await self.llm.structured(**kwargs)
+            try:
+                return await self.llm.structured(**kwargs, images=[reference])
+            except LLMImagesUnsupportedError:
+                return await self.llm.structured(**kwargs)
 
         def draw(made: DiagramDesign, _last: bool) -> tuple[bytes, int, int]:
             if made.diagram.template != template:
@@ -350,6 +364,7 @@ class BodyRoom:
                 if report.problems and not last:
                     raise ImageProviderError("\n".join(report.problems))
                 made.svg = report.svg
+            made.svg = inject_figures(made.svg, FigureColors.from_scheme(scheme) if scheme is not None else None)
             return svg_to_png(made.svg, width=RENDER_WIDTH.get(kind, 1600))
 
         svg, (png, w, h) = await design(SvgSpec, draw_svg)

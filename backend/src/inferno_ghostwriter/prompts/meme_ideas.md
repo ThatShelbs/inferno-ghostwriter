@@ -27,7 +27,7 @@ $recent
 $note
 $cards
 
-The character kit (for casting staged formats and staging comic panels):
+The cast and the scene kit (for casting staged formats and staging comic panels):
 <kit>
 $kit
 </kit>

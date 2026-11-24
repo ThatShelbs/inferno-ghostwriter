@@ -12,8 +12,7 @@ import math
 import random
 from dataclasses import dataclass, field
 
-from inferno_ghostwriter.images.kit.face import f, sparkle_path
-from inferno_ghostwriter.images.kit.paint import Painter
+from inferno_ghostwriter.images.kit.paint import Painter, f, sparkle_path
 from inferno_ghostwriter.images.kit.style import INK_DARK, KitStyle, blueprint_ground, kit_style
 from inferno_ghostwriter.images.palettes import Scheme, mix, scheme
 

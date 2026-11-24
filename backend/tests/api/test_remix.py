@@ -118,26 +118,28 @@ def test_redraw_and_remix_build_on_an_edited_image(client: TestClient, sample_do
     # Never edited: the redraw prompt carries no edit block.
     fake_llm.calls.clear()
     client.post(f"/api/images/{diagram['id']}/redraw", json={})
-    plain = next(c for c in fake_llm.calls if c["task"] == "diagram image design")
+    plain = next(c for c in fake_llm.calls if c["task"] == "diagram design")
     assert "<edits>" not in plain["prompt"]
 
     assert client.post(f"/api/images/{diagram['id']}/edit", json={"instruction": "Make the arrows orange"}).json()["status"] == "succeeded"
     fake_llm.calls.clear()
     assert client.post(f"/api/images/{diagram['id']}/redraw", json={"tweaks": {"palette": "viridis"}}).json()["status"] == "succeeded"
-    draw = next(c for c in fake_llm.calls if c["task"] == "diagram image design")
-    assert "Make the arrows orange" in draw["prompt"] and "<current_design>" in draw["prompt"]
+    draw = next(c for c in fake_llm.calls if c["task"] == "diagram design")
+    assert "Make the arrows orange" in draw["prompt"] and "<current_design>" in draw["prompt"]  # the filled template
     assert "viridis" in draw["prompt"].lower()
     # Later redraws keep building on it ...
     fake_llm.calls.clear()
     client.post(f"/api/images/{diagram['id']}/redraw", json={})
-    assert "Make the arrows orange" in next(c for c in fake_llm.calls if c["task"] == "diagram image design")["prompt"]
+    assert "Make the arrows orange" in next(c for c in fake_llm.calls if c["task"] == "diagram design")["prompt"]
     # ... until the author asks for a new idea.
     fake_llm.calls.clear()
+    # (the next idea is drawn freehand, so its design call is the SVG one)
     client.post(f"/api/images/{diagram['id']}/redraw", json={"rethink": True})
-    assert "<edits>" not in next(c for c in fake_llm.calls if c["task"] == "diagram image design")["prompt"]
+    designs = ("diagram design", "diagram image design")
+    assert "<edits>" not in next(c for c in fake_llm.calls if c["task"] in designs)["prompt"]
     fake_llm.calls.clear()
     client.post(f"/api/images/{diagram['id']}/redraw", json={})
-    assert "<edits>" not in next(c for c in fake_llm.calls if c["task"] == "diagram image design")["prompt"]
+    assert "<edits>" not in next(c for c in fake_llm.calls if c["task"] in designs)["prompt"]
 
 
 def test_a_style_reference_reaches_the_designer_and_can_be_removed(client: TestClient, sample_docx: bytes, fake_llm: FakeLLM) -> None:
@@ -153,6 +155,6 @@ def test_a_style_reference_reaches_the_designer_and_can_be_removed(client: TestC
     assert out["reference_url"] and client.get(out["reference_url"]).status_code == 200
     fake_llm.calls.clear()
     assert client.post(f"/api/images/{diagram['id']}/redraw", json={"improve": False}).json()["status"] == "succeeded"
-    design = next(c for c in fake_llm.calls if c["task"] == "diagram image design")
+    design = next(c for c in fake_llm.calls if c["task"] == "diagram design")
     assert design["images"] == 1 and "style reference" in design["prompt"]
     assert client.delete(f"/api/images/{diagram['id']}/reference").json()["reference_url"] is None

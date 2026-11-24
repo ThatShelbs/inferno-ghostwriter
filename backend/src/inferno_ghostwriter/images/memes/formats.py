@@ -958,7 +958,7 @@ def build_spec(fmt: MemeFormat) -> str:
     width, height = fmt.size
     lines = [f"Format `{fmt.id}`: {fmt.name}", f"Looks like: {fmt.recognizable}", f"Canvas: {width}x{height}.", "", "Text slots:"]
     if fmt.staged:
-        lines.insert(2, "Drawn by code from the character kit." + _cast_line(fmt))
+        lines.insert(2, "Drawn by code with our cast and scene kit." + _cast_line(fmt))
     for s in fmt.slots:
         size = f", box {s.box[2]}x{s.box[3]}px" if s.box[2] else ""
         extra = " Speech bubble: set `speaker` to left/right/center." if s.bubble else ""

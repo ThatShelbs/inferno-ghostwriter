@@ -95,9 +95,9 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     assert kinds == ["hero", "diagram", "chart", "meme"]
     assert all(img["status"] == "ready" and img["url"] for img in project["images"])
     assert all(img["credit"].startswith("Author: Shelby Temple") for img in project["images"])
-    assert project["images"][0]["credit"] == "Author: Shelby Temple; Made with Claude Opus 5.5 (scene)"
+    assert project["images"][0]["credit"] == "Author: Shelby Temple; Made with Claude Opus 5.5 (SVG)"
     assert project["images"][2]["credit"].endswith("Claude Opus 5.5 + Vega-Lite")
-    assert [img["provider"] for img in project["images"][:3]] == ["claude-scene", "claude-diagram", "vega-lite"]
+    assert [img["provider"] for img in project["images"][:3]] == ["claude-svg", "claude-diagram", "vega-lite"]
     # The meme came from its room: six pitches, three drawn finalists to choose from, and three ideas left.
     meme = project["images"][3]
     assert meme["provider"] in ("claude-meme", "vega-lite")
@@ -123,6 +123,8 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     hero = project["images"][0]
     assert client.get(hero["url"]).headers["content-type"] == "image/png"
     assert hero["room"]["room"] == "opening" and hero["room"]["pitches"] and len(hero["finalists"]) == 3
+    # Exactly one finalist is the picture on show, for every image that has finalists.
+    assert all(sum(f["current"] for f in img["finalists"]) == 1 for img in project["images"] if img["finalists"])
     # Picking another finalist costs nothing and swaps the picture.
     picked = client.post(f"/api/images/{hero['id']}/pick", json={"index": 1}).json()
     assert picked["finalists"][1]["current"] and picked["url"] != hero["url"]
@@ -543,7 +545,7 @@ def test_brand_kit_and_edit_image(client: TestClient, sample_docx: bytes, fake_l
     created = client.post("/api/projects", json={"prompt": "Pie charts", "brand_kit": kit, "dials": {"revision_passes": 0}}).json()
     project = client.get(f"/api/projects/{created['project']['id']}").json()
     assert project["brand_kit"]["palette"] == ["#112233", "#aabbcc"]
-    hero_call = next(c for c in fake_llm.calls if c["task"] == "opening scene" or c["task"].endswith("drawing"))
+    hero_call = next(c for c in fake_llm.calls if c["task"].endswith("drawing"))
     assert "chalkboard sketch" in hero_call["prompt"] and "#112233" in hero_call["prompt"] and "a tiny robot" in hero_call["prompt"]
     bad = client.patch(f"/api/projects/{project['id']}", json={"brand_kit": {"palette": ["orange"]}})
     assert bad.status_code == 422
@@ -566,7 +568,7 @@ def test_redraw_all_images_uses_the_new_brand_kit(client: TestClient, sample_doc
     fake_llm.calls.clear()
     job = client.post(f"{url}/images/redraw").json()
     assert job["status"] == "succeeded", job
-    designs = [c for c in fake_llm.calls if c["task"].endswith(("image design", "drawing", "opening scene"))]
+    designs = [c for c in fake_llm.calls if c["task"].endswith(("image design", "drawing"))]
     # Every image is redrawn from the idea on show: no new pitching or judging, and the meme keeps its joke (code draws it).
     tasks = fake_llm.tasks()
     assert not {"opening ideas", "meme ideas", "diagram image ideas", "image sheet judge"} & set(tasks)

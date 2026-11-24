@@ -42,7 +42,8 @@ ARMS: dict[str, tuple[Arm | None, Arm]] = {
     "standing": (Arm((-28, -70), elbow=(-27, -96)), Arm((28, -70), elbow=(27, -96))),
     "pointing": (Arm((-28, -70), elbow=(-27, -96)), Arm((72, -127), 1, "point")),
     "looking_back": (Arm((-28, -70), elbow=(-27, -96)), Arm((27, -70), elbow=(27, -96))),
-    "nervous": (Arm((-28, -70), elbow=(-27, -96)), Arm((10, -176), -1, "towel")),
+    # The cloth dabs the upper corner of the forehead with the elbow out, so the worried face stays in view.
+    "nervous": (Arm((-28, -70), elbow=(-27, -96)), Arm((24, -180), -1, "towel", elbow=(40, -146))),
     "flashlight": (Arm((-28, -70), elbow=(-27, -96)), Arm((56, -106), 1, "flashlight")),
     "laptop": (None, Arm((52, -101), 1, "fist", 10)),
     "shrug": (

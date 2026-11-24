@@ -798,7 +798,7 @@ class MemeMaker:
 
 
 def _kit_menu() -> str:
-    from inferno_ghostwriter.images.kit import menu as kit_menu
     from inferno_ghostwriter.images.kit.props import menu as props_menu
+    from inferno_ghostwriter.images.memes.cast import menu as cast_menu
 
-    return kit_menu() + "\n" + props_menu()
+    return cast_menu() + "\n" + props_menu()

@@ -1,10 +1,13 @@
-"""The cast of the staged memes, drawn with the figure library (``images/figures``).
+"""The cast of the staged memes: the casting vocabulary Claude picks from, drawn with the figure library.
 
-Stagings still speak the casting vocabulary Claude picks from (a kind, an expression, a pose, a role). This module turns
-each pick into a figure: people in clean line art by default, dressed the way the original meme dresses that role
-(the plaid shirt and the red dress of Distracted Boyfriend, the orange puffer jacket of Drake, the sweating man in blue
-of Two Buttons), and the house ghost or robot (from the author's character kit) only when Claude casts them. Animals
-are not drawn; a dog or cat pick becomes a person.
+Claude casts each role with a kind (``person``, ``ghost`` or ``robot``), an expression and, in comics, a pose; this
+module is the only place that vocabulary is defined (``Character``, ``KINDS``, ``EXPRESSIONS``, ``POSES``, ``menu``)
+and turns each pick into a figure (``images/figures``): people in clean line art by default, dressed the way the
+original meme dresses that role (the plaid shirt and the red dress of Distracted Boyfriend, the orange puffer jacket
+of Drake, the sweating man in blue of Two Buttons), and the house ghost or robot only when Claude casts them.
+
+Older meme states may name kinds, accessories or hand props the earlier rigged kit drew; they still load: a dog or
+cat becomes a person, and anything the figures cannot draw is ignored.
 """
 
 from __future__ import annotations
@@ -17,54 +20,100 @@ from inferno_ghostwriter.images.figures import SKIN_TONES, FigureColors, figure
 from inferno_ghostwriter.images.figures.base import HAIR_TONES
 from inferno_ghostwriter.images.palettes import Scheme
 
-# The casting vocabulary's poses and expressions, as the figure library names them.
-POSE = {
-    "stand": "standing",
-    "wave": "yep",
-    "point": "pointing",
-    "point_up": "yep",
-    "arms_up": "shrug",
-    "shrug": "shrug",
-    "hold": "standing",
-    "hold_both": "standing",
-    "typing": "laptop",
-    "facepalm": "nervous",
-    "chin": "arms_crossed",
-    "wipe": "nervous",
-    "block": "nope",
-    "block_back": "nope",
-    "reach": "pointing",
-    "present": "pointing",
-    "proud": "arms_crossed",
-    "sit": "standing",
-    "sit_hold": "standing",
-    "sit_type": "laptop",
-    "float": "standing",
+KINDS = ("person", "ghost", "robot")
+KIND_HINTS = {
+    "person": "a line-art person, dressed like the original meme's character (no likeness of anyone real)",
+    "ghost": "the friendly Inferno Ghostwriter ghost (the house mascot)",
+    "robot": "the friendly house robot with a glowing visor face",
 }
-EXPRESSION = {
-    "happy": "happy",
-    "beaming": "happy",
-    "smug": "smug",
-    "blank": "neutral",
-    "hopeful": "happy",
-    "nervous": "nervous",
-    "worried": "nervous",
-    "shocked": "shocked",
-    "panic": "panicked",
-    "calm": "calm",
-    "thinking": "focused",
-    "mind_blown": "impressed",
-    "deadpan": "neutral",
-    "sad": "crying",
-    "nope": "disgusted",
-    "grumpy": "disgusted",
-    "determined": "focused",
-    "sweating": "nervous",
-    "love": "impressed",
-    "sleepy": "calm",
-    "content": "calm",
-    "frozen_smile": "smug",
+LEGACY_KINDS = {"dog": "person", "cat": "person"}  # kinds older meme states may name
+ACCESSORIES = ("none", "sunglasses")  # sunglasses draw the figures' `cool` shades; older accessories are ignored
+PROPS = ("none",)  # hand props are part of each staging now; older picks are ignored
+
+
+def kind_of(kind: object, default: str = "person") -> str:
+    """A cast kind from a pick, mapping the older kinds (dog, cat) to a person."""
+    k = str(kind or "")
+    k = LEGACY_KINDS.get(k, k)
+    return k if k in KINDS else default
+
+
+@dataclass(frozen=True)
+class Character:
+    """One cast member in one beat: who, how they look and which way they face."""
+
+    kind: str = "person"
+    expression: str = "happy"
+    pose: str = "stand"
+    facing: str = "right"
+    accessory: str = "none"
+    prop: str = "none"
+    variant: int = 0
+    label: str = ""  # the role (picks the original meme's look, names it in alt text)
+
+
+# The poses and expressions Claude may pick: name -> (the figure library's name, what a prompt reads).
+POSES: dict[str, tuple[str, str]] = {
+    "stand": ("standing", "standing, arms relaxed"),
+    "wave": ("yep", "a cheerful hand up"),
+    "point": ("pointing", "pointing ahead (toward what it faces)"),
+    "point_up": ("yep", "pointing up, 'aha'"),
+    "arms_up": ("shrug", "both arms out: celebrating or panicking"),
+    "shrug": ("shrug", "shrugging, palms up"),
+    "hold": ("standing", "standing, holding still"),
+    "hold_both": ("standing", "standing firm, holding on"),
+    "typing": ("laptop", "typing on a laptop at a small desk"),
+    "facepalm": ("nervous", "a hand to the brow, under pressure"),
+    "chin": ("arms_crossed", "arms folded, weighing it up"),
+    "wipe": ("nervous", "wiping sweat off the brow with a cloth"),
+    "block": ("nope", "turned away, palm raised: 'no thanks'"),
+    "block_back": ("nope", "turned away with a palm up (the 'nope' panel)"),
+    "reach": ("pointing", "reaching forward"),
+    "present": ("pointing", "presenting something to the side it faces"),
+    "proud": ("arms_crossed", "arms folded, chest out"),
+    "sit": ("standing", "at rest"),
+    "sit_hold": ("standing", "at rest, calm"),
+    "sit_type": ("laptop", "working at a laptop"),
+    "float": ("standing", "idle, arms down"),
 }
+EXPRESSIONS: dict[str, tuple[str, str]] = {
+    "happy": ("happy", "big happy grin"),
+    "beaming": ("happy", "overjoyed, eyes squeezed happy"),
+    "smug": ("smug", "half-lidded, lopsided smirk"),
+    "blank": ("neutral", "an expressionless stare"),
+    "hopeful": ("happy", "hopeful, smiling"),
+    "nervous": ("nervous", "forced wobbly smile, sweat drop"),
+    "worried": ("nervous", "brows up, wobbly mouth, sweat"),
+    "shocked": ("shocked", "wide eyes, O mouth"),
+    "panic": ("panicked", "wide eyes, screaming, sweating"),
+    "calm": ("calm", "eyes closed, serene smile"),
+    "thinking": ("focused", "narrowed eyes, locked in"),
+    "mind_blown": ("impressed", "brows up, an amazed 'ooh'"),
+    "deadpan": ("neutral", "flat, unimpressed"),
+    "sad": ("crying", "tears streaming"),
+    "nope": ("disgusted", "eyes squeezed shut in disgust"),
+    "grumpy": ("disgusted", "frowning, turning away"),
+    "determined": ("focused", "focused brows, flat mouth"),
+    "sweating": ("nervous", "worried, sweating"),
+    "love": ("impressed", "starry-eyed admiration"),
+    "sleepy": ("calm", "eyes closed"),
+    "content": ("calm", "eyes closed, content smile"),
+    "frozen_smile": ("smug", "still smiling, but the eyes have realized something (the 'right?' panel)"),
+    "cool": ("cool", "dark sunglasses and a confident grin"),
+}
+POSE = {k: v[0] for k, v in POSES.items()}
+EXPRESSION = {k: v[0] for k, v in EXPRESSIONS.items()}
+
+
+def menu() -> str:
+    """The cast, expressions and poses, as a prompt reads them."""
+    kinds = "; ".join(f"`{k}` ({h})" for k, h in KIND_HINTS.items())
+    exprs = ", ".join(f"`{k}` ({h})" for k, (_, h) in EXPRESSIONS.items())
+    poses = ", ".join(f"`{k}` ({h})" for k, (_, h) in POSES.items())
+    return (
+        f"Characters: {kinds}.\nExpressions: {exprs}.\nPoses (comics): {poses}.\n"
+        "Accessories: `none`, or `sunglasses`. Hand props are part of each staging (use `none`)."
+    )
 
 
 @dataclass(frozen=True)
@@ -85,6 +134,8 @@ ROLE_LOOKS: dict[str, RoleLook] = {
     "shiny": RoleLook("dress", "long", "#d6232a", pose="walking", skin=0, hair_tone=2, facing="left"),
     "partner": RoleLook("tee", "long", "#5b8fc9", skin=1, hair_tone=2),
     "chooser": RoleLook("jacket", "short", "#f08a24", skin=3, hair_tone=0),
+    # Two Buttons: the man in a blue suit wiping his brow (his own look; Claude still casts the role `chooser`).
+    "sweater": RoleLook("tee", "short", "#3d6db5", skin=1, hair_tone=0),
     "twin": RoleLook("tee", "short", "#c8282e", skin=1, hair_tone=0),
     "midwit": RoleLook("tee", "messy", "#6d6d78", skin=1, hair_tone=0),
     "beginner": RoleLook("tee", "bald", "#e8e2d6", skin=1),
@@ -110,24 +161,37 @@ class Placed:
     anchors: dict[str, tuple[float, float]] = field(default_factory=dict)
 
 
-def draw(ch: Any, x: float, y: float, height: float, *, sch: Scheme | None = None, **_: Any) -> Placed:
-    """Draw cast member ``ch`` (a ``kit.Character``) with its feet at (x, y), ``height`` tall."""
-    role = str(getattr(ch, "label", "") or "")
+def role_look(ch: Character) -> RoleLook:
+    """How a person in this role is dressed (the original meme's look, else a variant)."""
+    return ROLE_LOOKS.get(ch.label) or VARIANTS[ch.variant % len(VARIANTS)]
+
+
+def colors_for(ch: Character, sch: Scheme | None = None) -> FigureColors:
+    """The colors ``ch`` is drawn in, so a staging can draw a matching arm or hand of its own."""
+    if kind_of(ch.kind) != "person":
+        return FigureColors.from_scheme(sch) if sch is not None else FigureColors()
+    look = role_look(ch)
+    shirt = look.shirt or (sch.ramp[len(sch.ramp) // 2] if sch is not None else "#cf4446")
+    return FigureColors(skin=SKIN_TONES[look.skin % len(SKIN_TONES)], hair=HAIR_TONES[look.hair_tone % len(HAIR_TONES)], shirt=shirt)
+
+
+def draw(ch: Character, x: float, y: float, height: float, *, sch: Scheme | None = None, **_: Any) -> Placed:
+    """Draw cast member ``ch`` with its feet at (x, y), ``height`` tall."""
+    role = ch.label
+    kind = kind_of(ch.kind)
     pose = POSE.get(ch.pose, "standing")
-    expression = EXPRESSION.get(ch.expression, "neutral")
+    expression = "cool" if ch.accessory == "sunglasses" else EXPRESSION.get(ch.expression, "neutral")
     facing = "left" if ch.facing == "left" else "right"
-    if ch.kind in ("ghost", "robot"):
-        colors = FigureColors.from_scheme(sch) if sch is not None else None
-        sym = figure(ch.kind, pose, colors=colors, expression=expression, facing=facing, tag=f"g{next(_counter)}")
+    colors = colors_for(ch, sch)
+    if kind != "person":
+        sym = figure(kind, pose, colors=colors if sch is not None else None, expression=expression, facing=facing, tag=f"g{next(_counter)}")
     else:
-        look = ROLE_LOOKS.get(role) or VARIANTS[ch.variant % len(VARIANTS)]
+        look = role_look(ch)
         if look.pose and (ch.pose in ("point", "stand", "wave", "proud") or role in ("distracted", "shiny")):
             pose = look.pose
         facing = look.facing or facing
         if role == "chooser" and ch.pose == "point":
             pose = "yep"  # Drake's approving beat
-        shirt = look.shirt or (sch.ramp[len(sch.ramp) // 2] if sch is not None else "#cf4446")
-        colors = FigureColors(skin=SKIN_TONES[look.skin % len(SKIN_TONES)], hair=HAIR_TONES[look.hair_tone % len(HAIR_TONES)], shirt=shirt)
         sym = figure(
             "line", pose, colors=colors, expression=expression, facing=facing, outfit=look.outfit, hair=look.hair, tag=f"p{next(_counter)}"
         )

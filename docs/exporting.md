@@ -2,7 +2,7 @@
 
 Open a post and click **Export**. Each platform gives you a zip bundle; Medium, Substack, LinkedIn and X also offer **Copy**, which puts the post on your clipboard as rich HTML with the images embedded, ready to paste into the platform's editor.
 
-`thumbnail.png` is cut from the post's opening image at each platform's size: a centre crop, which every opening style is laid out to survive (everything that matters sits in the middle 5:2 band). An opening meme is padded instead of cropped, with the meme's own edge colour, so no caption is cut off. See [Opening images](opening-images.md).
+`thumbnail.png` is cut from the post's opening image at each platform's size: a centre crop, which every opening style is laid out to survive (everything that matters sits in the middle 5:2 band). An opening meme is padded instead of cropped, with the meme's own edge colour, so no caption is cut off. See [Opening images](images.md#opening-images).
 
 | Platform | Bundle contents | Notes |
 | --- | --- | --- |

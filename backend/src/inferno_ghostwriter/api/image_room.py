@@ -83,7 +83,7 @@ def finalists_out(image: ProjectImage) -> list[FinalistOut]:
             label=str(f.get("label") or ""),
             score=f.get("score"),
             reads_as=str(f.get("reads_as") or ""),
-            current=f.get("spec") == image.spec,
+            current=bool(f.get("file_name")) and f.get("file_name") == image.file_name,
         )
         for i, f in enumerate(image.finalists or [])
     ]

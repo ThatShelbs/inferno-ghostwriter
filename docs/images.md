@@ -2,146 +2,258 @@
 
 Every post gets images that add value for the reader. The plan decides how many (by default as often as the author uses images in their own posts, measured in the voice profile's baseline, never more than one per 150 words; one per 350 words when there is no measurement; at least two, at most twelve; or the persona's default) and what each is for. Every example the post introduces ("Here is the file:") gets its image or code block; see [Examples the post introduces](#examples-the-post-introduces).
 
-Claude draws every image itself: vector art as SVG and data visualizations as Vega-Lite specs. There is no third-party image model and nothing to configure.
+Claude designs every image itself; code draws it. There is no third-party image model and nothing to configure. Nothing a model writes is executed.
 
 | Kind | Purpose | Made by |
 | --- | --- | --- |
-| **hero** | Opening image and thumbnail, in one of nine styles a judging panel picks from: visual metaphor, data art, opening meme, cheat sheet, sourced data chart, big number, versus split, framework diagram or screen mock ([Opening images](opening-images.md)) | Claude SVG, a code template with Claude's words and verified data, or the meme room (16:9) |
-| **illustration** | A conceptual image or visual metaphor for a section | Claude SVG (16:9) |
+| **hero** | Opening image and thumbnail, in one of nine [styles](#opening-images) | Claude SVG, a data-art engine, a code template with Claude's words and verified data, or the meme room (16:9) |
+| **illustration** | A conceptual image or visual metaphor for a section | Claude SVG (16:9), with [library figures](#the-figure-library) where a person helps |
 | **icon** | One concept icon, or a row of 2-4, anchoring a list of steps or principles | Claude SVG |
-| **diagram** | Concepts, workflows, architectures, comparisons, decision trees | Claude SVG |
+| **diagram** | Concepts, workflows, architectures, comparisons, decision trees | One of nine [code templates](#diagram-templates) Claude fills, or Claude SVG |
 | **chart** | Data visualization (real numbers from the post, or labeled illustrative data) | Claude Vega-Lite spec with inline data |
 | **screenshot** | The post shows what a screen looks like (an app page, settings, a chat, an editor, a terminal) | Claude SVG: a faithful mock of that screen with the post's real content; **Replace** it with a real capture if you have one |
-| **meme** | The closing joke | One of 23 meme formats: Claude writes the joke and draws the art, Inferno Ghostwriter owns layout and type ([below](#closing-memes)) |
+| **meme** | The closing joke | One of 29 [meme formats](#memes), drawn by code from Claude's pitch |
 
-Each image is told what the post's other images show, so the set looks like one piece of work and no two images repeat each other. Platforms crop the thumbnail from the center of the opening image (as wide as 5:2), so it keeps everything that matters in the middle band. The opening image has its own pitch, panel and review; see [Opening images](opening-images.md).
+Each image is told what the post's other images show, so the set looks like one piece of work and no two images repeat each other. Platforms crop the thumbnail from the centre of the opening image (as wide as 5:2), so it keeps everything that matters in the middle band.
+
+## One room for every image
+
+The opening image, the closing meme and every image in between are made the same way (`images/service.py` hands each to its room: `OpeningRoom` in `images/opening/room.py`, `MemeMaker` in `images/memes/generate.py`, `BodyRoom` in `images/body.py`):
+
+1. **Pitch.** Claude pitches several ideas for this spot of the post (six or more jokes for a meme, six openings across styles on Auto, four ways to show an in-body point: a diagram, a chart or an illustrated metaphor). Every pitch quotes the passage of the post it serves (`anchor`); code checks the quote is really in the post (`images/story.py`, `anchored`) and ranks a pitch with a made-up anchor last, so the picture always serves a real moment. Before pitching, code deals a few seeded **angle cards** into the prompt (`story.deal`: two moments sampled from the post, a family mix, a tone), so two runs on the same post pitch different ideas while staying on the story.
+2. **Rank the pitches** (`judge.rank_pitches`, one text call). The judge scores every pitch for story fit, clarity at a glance and surprise, may veto one that is false, off-topic or cannot be drawn well, and for memes may punch up the winner's words (kept only within every slot's limit).
+3. **Draw candidates.** The best `image_candidates` (6) for the opener and closer, `image_body_candidates` (3) for an in-body image, all at once. Code-drawn formats (staged memes, templates, data-art engines, diagrams) cost no drawing call.
+4. **Judge the pictures** (`judge.judge_sheet`, one vision call). The judge sees every candidate at once, next to the author's own [reference images](#the-reference-library) when the library has a match (the original meme, the author's data-art or diagram examples), says in one sentence what each picture shows to a stranger, scores it (and its fidelity to the original format) and names one concrete fix.
+5. **Refine and keep finalists.** The best `image_finalists` (3) are rebuilt with their fix and kept as **finalists** (`ProjectImage.finalists`). The card's finalist strip swaps between them with no model call (`POST /api/images/{id}/pick`); each finalist has its own file and source, so Edit, Words and Redraw work on whichever is showing.
+
+The judge is one model setting (`image_judge`, `model:effort`, default `opus:medium`). Neither judge call ever fails an image: on an error, or with the Claude Code subscription connection (it cannot be shown a picture), the pitch order stands. Pitches are stored on the image (the opening and meme state in `ProjectImage.spec`, in-body ideas in `ProjectImage.ideas`), so the Ideas board, Redraw and *New idea* move between them without pitching again until every idea has been tried.
+
+### On every card
+
+Every image has the same action bar (`ImageCard.tsx`) and the same ideas board (`ImageRoomDialog.tsx`):
+
+- **Ideas** shows every pitch with its anchor, score and why (`ImageOut.room`: `room` opening, meme or body; `pitches`; text `slots`; `sources`; `why`). *Use this idea* draws one (`POST /api/images/{id}/redraw` with `concept`); *Try another format* draws it another way (`format`: a meme format, an opening style, or another kind for an in-body image; the choices come from `GET /api/image-formats?room=&kind=`, and the whole meme bank is open to the opening image); an optional steer in your own words goes with any of them (`note`).
+- **Finalists** swap the picture with no call to Claude.
+- **Redraw** critiques the image and draws the same idea better ([Redraw that improves](#redraw-that-improves)); **Remix** lets you choose the experiment and add a steer.
+- **Edit** changes it by instruction ("make the arrows orange"); the rest stays.
+- **Words** retypes the text of a code-drawn image (memes, opening templates; `PUT /api/images/{id}/words`) with no call to Claude. Numbers and sources cannot be changed this way.
+- **Style reference** (on the Ideas board): *make it like this*. Attach any image whose look you want (`POST`/`DELETE /api/images/{id}/reference`, stored as `ProjectImage.reference`, shown from `ImageOut.reference_url`). The designer and the judge both see it on every later draw of that image; it steers the look, never the content.
+- **Builds on**, **Replace**, **Versions**, caption, credit and alt text: see [below](#redraw-new-idea-replace-versions).
+
+The card also shows *Why the judge picked this one* and what the last redraw tried.
+
+## Opening images
+
+The opening image sits right under the title and is also the post's thumbnail. In a feed it shows at about 300 pixels wide next to the title, so it decides whether anyone clicks. The goal is an image people assume a skilled designer made for this exact post: crisp, accurate, on-title and clickable, never generic AI filler. The code lives in `images/opening/`: `styles.py` (the only catalog), `room.py` (`OpeningRoom`), `templates.py`, `charts.py` and `canvas.py` (code templates), `facts.py` (the fact check), `specs.py` (`OpeningIdeas`, `OpeningBuild`).
+
+| Style | What it is | Built by | Suits |
+| --- | --- | --- | --- |
+| **Visual metaphor** (`editorial`) | The post's core mechanism acted out as one physical scene: marketing spend as coins through a plinko board into channel buckets | Claude SVG (linted, snapped to the scheme), library figures where a person helps | every post (always in the running) |
+| **Data art** (`data_art`) | Abstract and beautiful: flowing lines, particle fields, soft networks. Never literal objects; the subject shows only in structure, rhythm and colour, and it shows no numbers | A [data-art engine](#data-art-engines): Claude picks the engine and its dials | every post, best for data science, ML, analytics and finance |
+| **Opening meme** (`meme`) | A joke that sets up the tension the post resolves; with the closing meme it makes a *meme sandwich* | The meme room | opinion, lessons learned, listicles, joke openers; humor 3+ |
+| **Cheat sheet** (`cheat_sheet`) | 4-9 numbered tiles: the steps, rules or commands a reader would save | Code template | how-to, tutorial, listicle |
+| **Data story chart** (`data_chart`) | One factual chart that makes a big point | Code templates + verified data | case study, comparison, explainer, news peg, surprising number |
+| **Big number** (`big_number`) | One huge sourced figure, what it means and its source | Code template + verified data | case study, opinion, lessons learned, surprising number |
+| **Versus split** (`versus`) | Two columns: before and after, myth and reality, old way and new | Code template | comparison, tool review, myth-buster, contrarian |
+| **Framework diagram** (`framework`) | The idea in one picture: flow, 2x2 matrix, layered stack, cycle, funnel or timeline | Code templates | explainer, how-to, tutorial |
+| **The receipt** (`receipt`) | An oversized, crisp mock of the code, terminal output or prompt that proves the point | Claude SVG | hands-on, tutorial, tool review |
+
+Choose a style per post (*Opening image* on the new-post form and in *Edit brief & settings*), or set a default per persona (*Default formula* card). **Auto** is the default. Which styles suit a post comes from the article type (chosen, or read from the brief) and the opener; `GET /api/opening-styles` returns the catalog and `suggested_by_type`. An optional note ("coins through a plinko board") goes to the room and the judge as the author's direction.
+
+**How one is made.** On Auto, Claude pitches six concepts across at least three styles, **at least two open visual metaphors and one data art**, so imaginative ideas always compete with literal ones (a pitch that misses the mix is sent back once); with a style chosen it pitches four in that style. The room is told the styles of the author's last three openings. Data styles research the winning claim's numbers with web search (`opening_max_searches`, default 4). Code-drawn styles get their words and data from Claude (`OpeningBuild`) and are laid out in code. An opening meme goes to the meme room with the winning premise as its brief. A build that fails validation is retried once with the problems quoted. A concept that cannot be built (no verifiable numbers, a drawing that fails twice) gives way to the next best one, up to three; the last resort is a visual metaphor, and the card says which style was tried first (`fallback_from`).
+
+**Data art stays abstract** in four places: the style's rules (`SVG_RULES`), the pitching prompt, a check on the pitch (`room.literal_objects` sends a pitch that names coins, dice, people and the like back once), and the judge.
+
+### Facts
+
+A data opener prints only numbers it can stand behind (`facts.check`):
+
+- Every number in the data, the big number and the words must appear in the research, a citation's quoted text or the post itself, allowing for rounding and forms like 1,234 / 1.2k / 12% / $3.4M. Years are dates, not claims.
+- A waterfall's steps may be the difference between two found numbers; words never get that allowance.
+- Every source URL must be one the research cited (or empty for "This post"). The source line is printed on the image and added to the caption.
+
+If nothing verifiable is found, the next best idea is used: data openers are never "illustrative".
+
+### Templates
+
+Code-drawn opening styles share one 1600x900 canvas (`canvas.py`). Shapes are SVG written by code and rendered by resvg; every string is fitted to its box with Pillow in the bundled fonts (parallel texts share one size), so text is crisp and never overflows. Everything that matters stays inside the centre 1600x640 band, which every platform's thumbnail crop keeps (tested). A brand kit palette recolours the templates (`theme_for`).
+
+| Style | Templates |
+| --- | --- |
+| Cheat sheet | `cheat_grid` (4-9 numbered tiles) |
+| Versus split | `versus` (2-5 matched rows) |
+| Big number | `big_number` |
+| Framework diagram | `flow`, `matrix_2x2`, `stack`, `cycle`, `funnel`, `timeline` |
+| Data story chart | `line_annotated`, `slope`, `dumbbell`, `waterfall`, `tornado`, `ranked_bar`, `heatmap`, `spider` |
+
+Opening charts are drawn by code too (not Vega-Lite), so scales, labels and colours are consistent at thumbnail size.
+
+### Data-art engines
+
+`images/art/` holds deterministic generative engines that Claude only parameterizes: it picks one of `ENGINES` (`network_mesh`, `fan_streams`, `fluid_ribbons`, `radial_digits`, `particle_wave`, `glow_candles`, `rings`) and fills a `DataArtSpec` (`prompts/opening_build_art.md`); `render_art` draws it as layered SVG (glows, depth of field, gradients) in the scheme's colours. The same spec and scheme always give the same picture, the focal structure sits in the crop band, and the credit names provider `claude-art`. An edit changes the spec, not freehand SVG.
+
+### Meme sandwich
+
+Choosing **Opening meme** (or Auto picking one) opens the post with a meme as well as closing with one. The opening meme is pitched as an opener (`MemeContext.position="opening"`): it sets up the tension, works for someone who has not read the post, and saves the payoff. The closing meme waits for it and is told about it, so it uses a different format family, never repeats the joke, and ideally pays it off as a bookend (`ImageService.opening_may_be_meme` lets both run at once when the opening cannot be a meme). Memes are rarely 16:9, so an opening meme's thumbnail is padded instead of cropped (`thumbnail_fit: contain`).
+
+## In-body images
+
+`BodyRoom` (`images/body.py`, prompt `prompts/image_ideas.md`) pitches a few different ways to show a spot of the post. A slot's kind limits the options (`KIND_OPTIONS`: a diagram may become a chart or an illustrated metaphor; a screenshot stays a screenshot and an icon an icon). The best `image_body_candidates` are drawn, judged as pictures against the author's reference diagrams, the best is refined with its fix, and the finalists are kept. An image that builds on another, or a redraw of the idea on show, is drawn straight from its brief.
+
+For each draw Claude reads the text around the image, the author's *Images & Captions* guidance from the voice profile and the post's brand kit, then returns a structured design: SVG markup, a chart spec or a filled diagram template, plus alt text and a caption in the author's caption style (`prompts/image_system.md`).
+
+### Diagram templates
+
+`images/diagrams/` draws diagrams in code, in the clean style of the author's own diagrams: `pipeline`, `layer_stack`, `hub_spoke`, `matrix_2x2`, `timeline`, `venn`, `nested_rings`, `radial_bars`, `winner_card`. A diagram idea names a `template`; Claude fills a typed `DiagramDesign` (`prompts/image_diagram.md`) and code lays it out and fits the text, in the post's scheme (provider `claude-diagram`). An edit changes the filled spec. A diagram idea with no template is drawn as Claude SVG.
+
+### The figure library
+
+`images/figures/` is a small library of polished figures that Claude-authored SVG places with `<use href="#fig-...">`, so people in illustrations and visual metaphors are never freehand:
+
+- Styles: `bean` (flat rounded figures for editorial scenes), `line` (line-art people with expressive faces, outfits and hair, for memes), `ghost` (the house mascot) and `robot`.
+- Eleven poses (standing, pointing, looking back, sweating, flashlight, at a laptop, shrug, arms crossed, nope, yep, walking) and named expressions, including `cool` (sunglasses).
+- A figure id reads `fig-<style>-<pose>[-<expression>][-<outfit>][-<hair>][-left]`; `catalog_text` is the menu a drawing prompt reads, and `inject` adds the symbols after lint, so the figures keep their natural colours while the rest is snapped to the scheme.
+
+The ghost is the house cast. A redraw may try other casts (see *Redraw that improves*); real people's likenesses and other creators' characters are never drawn.
+
+## Memes
+
+The meme is the last thing a reader sees and the thing they share. `images/memes/` holds the catalog (`formats.py`, 29 formats), the room (`generate.py`), the stagings, the cast and the composer.
+
+1. **Writers' room** (`prompts/meme_ideas.md`, effort `effort_meme_ideas`, default high). Claude reads the whole post (a very long post keeps its opening and its ending), the plan's closing joke, running jokes and key concepts, the humor dial and the voice profile's *Humor* section, then pitches six or more concepts across format families, each with the final words for every slot, chart data where the format needs it, a caption and its anchor. The room is told which formats the author's last memes used and the post's [formula](formulas.md#the-closing-meme), because the meme lands straight after the closer: it must add a beat, not repeat it.
+2. **Draw** (no drawing call). Every format is drawn by code from the pitch. The famous formats and comics are staged in `stagings.py` (`STAGINGS`, `ROLES`): the panels, framing, who stands where and each beat's pose and expression are fixed, so *Right? Right?* is always the two-shot, the hopeful close-up, the blank stare and the frozen smile. Claude only casts the roles (`MemeConcept.cast`) and, for comics, picks each panel (`PanelPick`). The cast is drawn with the figure library (`memes/cast.py`): people in clean line art, dressed the way the original meme dresses that role (the plaid shirt and the red dress of *Distracted*, the orange puffer jacket of *Nope / Yep*), and the ghost or robot only when Claude casts them. Backdrops come from the [Cartoon Character Kit](#the-cartoon-character-kit) when it is on the machine, else from code (`images/kit/props.py`).
+3. **Compose** (`compose.py`). Code draws the layout, panel frames, speech bubbles, charts and chrome in the meme's scheme, and typesets every string with Pillow in the bundled fonts: each one sized to the largest font that fits its box, parallel slots sharing one size. Text cannot overflow.
+4. **Judge and refine**: the shared [room](#one-room-for-every-image), with the original meme from the reference library beside each candidate; the finalists' fixes are applied by restaging (`MemeStagingEdit`, `prompts/meme_restage.md`).
+
+If a pitch still cannot be drawn, the meme becomes the best other pitch, and only then a classic top/bottom caption meme over the ghost at its laptop; the card says which format could not be drawn (`fallback_from`).
+
+| Family | Formats |
+| --- | --- |
+| Famous formats, staged with our own cast | Nope / Yep, pointing twins, distracted, expanding brain, This is fine (one or two panels), two buttons, midwit bell curve, four-step plan, **Right? Right?**, always has been, change my mind, shocked strip, is this a...?, Panik / Kalm / Panik, running-away balloon |
+| Chart jokes | joke pie, terrible 3D exploded pie, deadpan bar chart, labeled map, spurious correlation, Venn diagram |
+| Comics | three-panel strip, four-panel grid |
+| Fake artifacts | team chat thread, terminal session, Nutrition Facts label, alignment chart |
+| Caption | classic top/bottom caption meme (also the fallback) |
+
+Chart jokes are captioned *(data: entirely made up)*. The meme's state (`ProjectImage.spec`, version 2: concepts, chosen, tried, format, build, scheme) keeps every pitch, so Redraw draws the same joke again, *Words* retypes it with no model call, and *Edit* restages it.
+
+**Adding a format:** add a `MemeFormat` to `FORMATS` in `formats.py` (text slots with boxes and character limits, `groups` for slots that share a size). A famous format gets a staging function in `stagings.py` (`STAGINGS`, its roles in `ROLES`, `signature` beats and `fit_tags`), its role outfits in `cast.ROLE_LOOKS`, and its original in `references.MEME_REFERENCES`. If the template draws anything (frames, charts, chrome), add a scene function to `SCENES` in `compose.py`. Add canned words to `DEMO_MEME_TEXTS` in `demo.py`; the tests render every format.
+
+## Colours, rendering and lint
+
+- **Schemes** (`images/palettes.py`, the only source of opener, meme and diagram colours). A `Scheme` is one ramp (inferno, magma or viridis) on one surface (white, gray or near-black). A new image's scheme rotates against the author's recent images, a brand kit palette wins, and a remix palette for an opener or meme offers only the house ramps (`remix.HOUSE`). `snap_svg`/`snap_tree` move every colour in model-drawn SVG to the nearest scheme colour. The scheme is stored in the image state as `scheme` (`"ramp:surface"`).
+- **Lint** (`images/lint.py`) checks model SVG for free before any judge sees it: it removes shapes entirely off the canvas and lone stray marks, and reports dead references, too many shapes and text outside the crop band. Problems go back to Claude through `draw_with_retry`.
+- **Rendering.** SVG is parsed with `lxml` and sanitized (no scripts, event handlers, `foreignObject` or external references), then rasterized locally by **resvg**. Charts are declarative Vega-Lite (remote data URLs are rejected), rendered by **vl-convert**; a brand palette of three or more colours becomes the chart's colour scheme, and a chart with made-up numbers says *Illustrative data* under its title. A design that cannot be drawn is sent back once with the error quoted (`images/base.draw_with_retry`); a bare `&` or an unclosed tag is repaired first (`render.parse_xml`).
+- **Fonts** are bundled in `images/memes/fonts/` (Anton, Inter, Comic Neue and JetBrains Mono, all SIL Open Font License), so images look the same on every machine.
 
 ## Examples the post introduces
 
 Authors lead into examples ("Here is the top of the file:", "This is what it looks like:"). A post must never point at something that is not there, so (`writer/examples.py`):
 
 - The plan gives every visual example a slot, and the writer and reviser are told that the lead-in is followed right away by its example: a placeholder for a screen or visual, a fenced code block for code, prompts, file excerpts and terminal output (even when the author's own posts show those as screenshots, which the app cannot paste).
-- The editor gets every lead-in with nothing after it (`find_dangling_leadins`: a paragraph that ends in a colon and promises to show something, followed by prose or a section heading) and tells the reviser to add what is missing.
+- The editor gets every lead-in with nothing after it (`find_dangling_leadins`) and tells the reviser to add what is missing.
 - A placeholder the writer made up right after a lead-in becomes a real slot instead of being dropped.
-- Whatever is still missing after editing becomes a new image slot right after its lead-in (`add_example_slots`; usually a drawn *screenshot*), briefed with the lead-in and the text around it, so it is drawn with the post's other images. The text is not changed. At most eight images are added this way.
-- A post written before this check can get the same fix: `POST /api/projects/{id}/examples` (job `fill_examples`, `fill_missing_examples`) adds and draws the missing images, keeps every existing image, and saves the old text in the history.
-
-## Design and rendering
-
-For each slot Claude reads the text around the image, the author's *Images & Captions* guidance from the voice profile, and the post's brand kit (below), then returns a structured design: SVG markup or a chart spec, plus alt text and a caption in the author's caption style. The art direction prompt (`prompts/image_system.md`) asks for layered compositions, gradients, soft shadows and the inferno palette, so hero and illustration images look like finished editorial art rather than clip art.
-
-Nothing a model writes is executed:
-
-- SVG is parsed with `lxml` and sanitized (no scripts, event handlers, `foreignObject` or external references), then rasterized locally by **resvg**.
-- Charts are declarative Vega-Lite (remote data URLs are rejected), rendered locally by **vl-convert**. A brand kit palette of three or more colors becomes the chart's color scheme in code, and a chart whose numbers are made up says *Illustrative data* under its title, so the label survives when the image is shared without its caption.
-
-A design that cannot be drawn (SVG that is not SVG, a chart spec Vega-Lite rejects) is sent back to Claude once with the error quoted (`draw_with_retry` in `images/base.py`). Smaller slips never get that far: a bare `&` or an unclosed tag is repaired by the parser (`render.parse_xml`) before sanitizing.
-
-Fonts are bundled in `images/memes/fonts/` (Anton, Inter, Comic Neue and JetBrains Mono, all under the SIL Open Font License; the license texts sit next to them). Meme text always uses them, and SVG text falls back to them when it names a font the machine lacks, so images look the same on Windows, macOS, Linux and in the packaged app.
-
-## Closing memes
-
-The meme is the last thing a reader sees and the thing they share, so it gets its own pipeline (`images/memes/`). The same room makes an opening meme when a post opens with one (a [meme sandwich](opening-images.md#meme-sandwich)); the closing meme is then made after it and told about it.
-
-1. **Writers' room** (`prompts/meme_ideas.md`, effort `effort_meme_ideas`, default high). Claude reads the whole post (a very long post keeps its opening and its ending, where callbacks pay off), the plan's closing joke and its running jokes and key concepts, the humor dial and the voice profile's *Humor* section, then pitches five concepts across at least three format families. Each pitch has the final words for every slot, chart data where the format needs it and a caption, and is scored on relevance, instant recognizability, surprise, clarity, voice fit and whether it works shared on its own. The best one wins. The room is told which formats the author's last three memes used, so posts do not all end the same way. It is also told the post's [formula](formulas.md#the-closing-meme) (article type, opener, body, closer), because the meme lands straight after the closer: it must add a beat, not repeat the closer, and a post that opened on a joke can have that joke brought back.
-2. **Staging** (no drawing call). The famous formats and the comics are drawn by code from the [character kit](image-kit.md): each classic's staging (panels, framing, who stands where, each beat's pose and expression) is fixed in `stagings.py`, so *Right? Right?* is always the meadow two-shot, the hopeful close-up, the blank stare and the frozen smile, and *This is fine* is always our dog in a bowler hat with a mug in a burning room. Claude only casts the roles (`cast`: our ghost, dog, cat, person or robot) and, for comics, picks each panel's backdrop, characters, expressions and poses (`panels`). Art-free formats (chat, terminal, Nutrition Facts, alignment chart, pie, spurious correlation, Venn) are composed from the pitch too. Production (`prompts/meme_build.md`) is only asked for older pitches that lack their data.
-3. **Composer** (`compose.py`). Code draws the layout, panel frames, speech bubbles, charts and chrome, the kit's staged art in the meme's [scheme](image-kit.md#palettes-imagespalettespy), and typesets every string with Pillow: each one is sized to the largest font that fits its box, parallel slots (rows, cells, panels) share one size, and words are only broken when nothing else fits. Text cannot overflow.
-
-If a build still cannot be drawn, the meme becomes the best other pitch in a format with no art (which cannot fail), so the reader still gets a whole joke. Only when there is none (for example, the author asked for one format) does it fall back to a classic top/bottom caption meme over the Inferno Ghostwriter ghost at its laptop. Either way the card says which format could not be drawn (`fallback_from` in the meme's state).
-
-| Family | Formats |
-| --- | --- |
-| Famous formats, staged faithfully with our own cast (no real people or characters) | Nope / Yep (Drake), pointing twins, distracted, expanding brain, This is fine (one or two panels, our dog), two buttons, midwit bell curve, four-step plan (Gru), **Right? Right?** (the "For the better, right?" format), always has been, change my mind, shocked strip, is this a...?, Panik / Kalm / Panik, running-away balloon |
-| Chart jokes, drawn with real chart machinery | terrible 3D exploded pie, spurious correlation (dual-axis Vega-Lite), Venn diagram |
-| Comics | three-panel strip, four-panel grid |
-| Fake artifacts | team chat thread, terminal session, Nutrition Facts label, alignment chart |
-| Caption | classic top/bottom caption meme (also the fallback) |
-
-Chart jokes are captioned *(data: entirely made up)*. A brand kit palette recolors the pie and Venn; Claude's art follows the brand style and palette.
-
-### Looks, the judging panel and the review
-
-Memes are meant to look different from one another. Each meme is drawn in one **look** (`images/memes/looks.py`, the only place a look is defined): inferno flat (the brand look), kawaii, soft 3D, viridis lab, magma noir, corporate slate, retro comic, pixel arcade, whiteboard doodle, blueprint and inferno robots. A look sets the kit's treatment (outline weight, flat, soft or 3D shading, halftone, linework, marker wobble, a pixel grid) and the **theme** the composer paints templates with: comic gutters, chat header, chart marks, alignment bands, bubble outlines. Colors never come from the look: every meme is drawn in a **scheme**, inferno, magma or viridis on white, gray or near-black (`images/palettes.py`), rotated against the author's recent images; a look may prefer a ramp or a tone, and a brand kit palette still wins.
-
-The look comes from, in order: the author's pick (the *Look* chips on the Ideas board, `meme_look`), the room's suggestion for that joke unless the author used it in one of their last two memes, or a weighted random pick among the looks they have not used lately. Redraw and *New idea* move to a different look; *Words* and *Edit* keep it. The look is stored in the meme's state (`look`); older memes read as inferno flat.
-
-Two [judging panels](image-kit.md#the-judging-panel-imagespanelpy) make the first meme a winner, both many small independent seats on Haiku, Sonnet and Opus run at once:
-
-- **Pitch panel** (`image_panel_meme`). The writers no longer grade their own jokes. Scrollers, a cold reader (rules a joke out below 5), a comedy editor (may punch up the winner's words, used only within every slot's limit), a meme connoisseur (is the format used the way the internet uses it?) and the author score every pitch. Code adds the votes; the totals rank *Next best idea*. If too few seats answer, the writers' own scores are used.
-- **Render panel and final pick** (`image_panel_render`, `image_panel_final`, setting `meme_review`). The two best pitches are drawn (no drawing call), blind readers say what each picture means with no context (matched against the premise), a craft and an appeal seat look closely, and Opus picks one and may ask for one fix (applied by restaging). Skipped for redraws, a picked pitch, with a Claude Code subscription connection (it cannot receive images), and for opening memes (the opening room judges them). The card shows *Why this one* and what strangers read in it.
-
-The writers' room is also told how the joke should be built (one specific truth, the punch word last, callbacks, an exaggerated picture, the ghost as an earnest, slightly anxious overachiever), lists about 12 raw angles before pitching, and must include a callback, a visual gag and an art-free format among its five.
-
-On the meme card:
-
-- **Ideas** opens the pitch board: all five jokes with their format and words. *Use this idea* draws one (`POST /api/images/{id}/redraw` with `meme_concept`), *Next best idea* moves to the best untried pitch (fresh pitches, avoiding the old ones, once all five are used), and the format menu asks for five new pitches in a format you pick (`meme_format`; formats from `GET /api/meme-formats`). Moving between pitches never asks Claude to pitch again, and a pitch with no art appears at once.
-- **Words** lets you retype any text in the meme (`PUT /api/images/{id}/meme-words`). The art is kept, the text is refitted, the alt text is rebuilt from the new words, and Claude is not called.
-- **Redraw** draws the same joke in a different look and scheme.
-- **Edit** changes the words, the casting or the comic panels by instruction ("make it a robot", "the second panel is a close-up"); the kit redraws it.
-- 👍 / 👎 teach the persona's taste ([taste](image-kit.md#the-authors-taste-imagestastepy)).
-
-To review every format, run `uv run python scripts/meme_gallery.py` (canned builds, free; add `--looks` to see every format in every look) and open `data/meme-gallery/index.html`. `--real --yes` asks Claude for new memes for your latest posts (costs money).
-
-**Adding a format:** add a `MemeFormat` to `FORMATS` in `images/memes/formats.py` (text slots with boxes and character limits, `groups` for slots that should share a size). A famous format gets a staging function in `stagings.py` (`STAGINGS`, its cast roles in `ROLES`) and its look, `signature` beats and `fit_tags` in `_STAGED`; if it needs chart data, describe it in `data` (the pitch menu shows that text). If the template draws anything (frames, charts, chrome), add a scene function to `SCENES` in `compose.py`. Add canned words to `DEMO_MEME_TEXTS` in `demo.py`; the tests render every format.
+- Whatever is still missing after editing becomes a new image slot right after its lead-in (`add_example_slots`; usually a drawn *screenshot*). The text is not changed. At most eight images are added this way.
+- A post written before this check can get the same fix: `POST /api/projects/{id}/examples` (job `fill_examples`).
 
 ## Brand kit (per post)
 
-Each post has its own image brand kit (`Project.brand_kit`): an image style, a palette of up to eight colors, a font for text in images, and a recurring motif. Set it under *Customize* when you start a post, or later in the **Image brand kit** card next to the post, where **Save and redraw images** gives every drawn image the new look (`POST /api/projects/{id}/images/redraw`; uploads stay). Empty fields fall back to the persona's visual style and the inferno palette.
+Each post has its own image brand kit (`Project.brand_kit`): an image style, a palette of up to eight colours, a font for text in images, and a recurring motif. Set it under *Customize* when you start a post, or later in the **Image brand kit** card, where **Save and redraw images** gives every drawn image the new look (`POST /api/projects/{id}/images/redraw`; uploads stay). Empty fields fall back to the persona's visual style and the inferno palette.
 
 ## Credits
 
-Each image gets a credit from the persona's template (default `Author: {name}; Made with {tool}`), where `{tool}` names the Claude model that drew it:
+Each image gets a credit from the persona's template (default `Author: {name}; Made with {tool}`), where `{tool}` names the Claude model that designed it:
 
 > The saddest pie; Author: Shelby Temple; Made with Claude Opus 5.5 (SVG)
 
-Charts read "Made with Claude Opus 5.5 + Vega-Lite", memes "Made with Claude Opus 5.5 (meme)", code-laid-out opening images "Made with Claude Opus 5.5 (layout)", and charts with made-up numbers are labeled *(illustrative data)*. Captions never name another tool as the image's maker, even if your own posts credit one. You can edit any caption, credit or alt text. Captions and credits live only on the image; caption lines the writer puts in the post body are removed.
+Charts read "Made with Claude Opus 5.5 + Vega-Lite", memes "(meme)", code-laid-out images "(layout)". Captions never name another tool as the image's maker. You can edit any caption, credit or alt text. Captions and credits live only on the image; caption lines the writer puts in the post body are removed.
 
 ## When an image fails
 
-One failed image never fails the post: it shows its error and a **Redraw** button, and the rest of the post is saved as usual. Jobs run in memory, so an image still waiting when the app stopped is marked as failed at the next startup instead of spinning forever.
+One failed image never fails the post: it shows its error and a **Redraw** button, and the rest of the post is saved as usual. Jobs run in memory, so an image still waiting when the app stopped is marked as failed at the next startup.
 
 ## Redraw, new idea, replace, versions
 
-- **Edit**: tell Claude what to change ("make the arrows orange", "label the y-axis in percent"). Claude gets the current SVG or chart spec and changes only what you describe (`POST /api/images/{id}/edit`, `prompts/image_edit.md`). Only images Claude drew can be edited this way. Your edits are remembered (`ProjectImage.edits`): a later **Redraw** or **Remix** builds on the edited picture (its current design goes into the draw prompt) and applies only the new look, instead of going back to the original idea. **New idea**, picking another pitch, style or format, or uploading a replacement starts over.
-- **Redraw**: Claude makes the image better, not just different. It first looks at the current image and names its weakest point and the concrete fixes (`ImprovementPlan`, `prompts/image_improve.md`; the PNG is sent when the connection can show images, else its source), then redraws the same idea with those fixes plus one or two experiments: other colors, another cast (dogs, cats, people, robots or objects instead of the ghost), another staging or another medium. The card says what was tried, and the next redraw avoids the last eight experiments. See *Redraw that improves* below.
-- **Remix**: choose the experiment yourself (colors, who is in it, staging, medium); anything left on *Surprise me* is picked for you.
-- **Builds on**: draw this image from an earlier one so both share data, colors and shapes. See *Images that build on each other* below.
-- **New idea**: Claude throws out the concept and designs a different image for the same purpose.
+- **Edit**: Claude gets the current design (SVG, chart spec, filled template, data-art settings or meme staging) and changes only what you describe (`POST /api/images/{id}/edit`, `prompts/image_edit.md`). Your edits are remembered (`ProjectImage.edits`): a later **Redraw** or **Remix** builds on the edited picture and applies only the new look. Picking another idea, style or format, *New idea*, or an upload starts over.
+- **Redraw**: makes the image better, not just different. See below.
+- **New idea**: the next untried pitch, or fresh pitches once all are used.
+- **Builds on**: draw this image from an earlier one so both share data, colours and shapes. See *Images that build on each other*.
 - **Replace**: upload your own image (PNG, JPEG, WebP, ...; converted to PNG).
 - **Versions**: every version is kept; click one to restore it.
 
 ## Redraw that improves
 
-`images/remix.py` is the only place a redraw experiment is defined, and every image goes through it: the opening image, the closing meme and everything between.
+`images/remix.py` is the only place a redraw experiment is defined, and every image goes through it. A redraw first critiques the current image (`brainstorm`, `ImprovementPlan`, `prompts/image_improve*.md`, effort `effort_image_improve`; the PNG is sent when the connection can show images, else its source), then draws the same idea with those fixes plus one or two experiments:
 
 | Dimension | Options | Applies to |
 | --- | --- | --- |
-| Colors (`palette`) | inferno, viridis, ocean, sunrise pastel, forest, one flame on grey, magma noir, candy pop, blueprint, sepia print | every image (charts, code-drawn openers and meme templates take the colors in code) |
+| Colours (`palette`) | inferno, viridis, ocean, sunrise pastel, forest, one flame on grey, magma noir, candy pop, blueprint, sepia print (house ramps only for openers and memes) | every image |
 | Who is in it (`cast`) | the ghost, friendly robots, dogs, cats, stylized people, woodland animals, an octopus, living objects, no characters | illustrations, visual-metaphor openers, memes |
 | Staging (`staging`) | close-up, wide shot, isometric, top-down, before/after split, strict symmetry, diagonal | illustrations, diagrams, visual-metaphor and data-art openers |
 | Medium (`medium`) | flat vector, paper cut, line art, soft 3D clay, woodcut/risograph | illustrations, icons, visual-metaphor and data-art openers |
 
-- `choose_tweaks` picks up to two experiments with no model call, from the dimensions that suit the image (`remix_dimensions`), skipping what the last eight redraws tried (`ProjectImage.remix["recent"]`).
-- A post's brand-kit palette is never replaced at random; a palette you pin in **Remix** is.
-- The ghost stays the house character. A redraw may try another cast because you asked for experiments; real people's likenesses and other companies' characters are never used.
-- `POST /api/images/{id}/redraw` takes `tweaks` (`{"palette": "viridis", "cast": "dogs"}`) and `improve` (false = only the twist). `GET /api/remix-options` lists the catalog. `ImageOut.remix` holds the critique and the experiments; `ImageOut.remix_dimensions` what can vary.
-- Picking a stored pitch or a format (the Ideas boards) skips the critique: you chose the idea. **Redraw all images** redraws plainly, with no critique and no experiments, so a brand-kit change does not also change the look.
-- A failed critique never fails the redraw: the experiments still apply.
+- `choose_tweaks` picks the experiments with no model call, from the dimensions that suit the image (`remix_dimensions`), skipping what the last eight redraws tried (`ProjectImage.remix["recent"]`). A brand-kit palette is never replaced at random; a palette you pin in **Remix** is.
+- `POST /api/images/{id}/redraw` takes `tweaks` (`{"palette": "viridis", "cast": "dogs"}`), `improve` (false = only the twist) and `note` (your steer). `GET /api/remix-options` lists the catalog.
+- Picking a stored idea or a format skips the critique: you chose the idea. **Redraw all images** redraws plainly, with no critique and no experiments. A failed critique never fails the redraw.
 
 ## Images that build on each other
 
-Two images that tell one story (a single fitted line, then the same points split into groups for Simpson's paradox) must look like the same data taken further, not two unrelated datasets.
+Two images that tell one story (a single fitted line, then the same points split into groups for Simpson's paradox) must look like the same data taken further.
 
-- The planner sets `builds_on` on an image slot to the id of the earlier image it extends (`ImageSlot.builds_on`, `prompts/plan.md`); `normalize_slots` keeps only links to an earlier image that is still in the post.
-- The later image waits for the earlier one, then is designed with that image's source in the prompt (`ImageService._builds_on`): a chart copies the base chart's data rows, scales, colors and size and adds only what is new; other kinds reuse the palette, shapes, labels and layout.
-- On the card, **Builds on** links an image to any earlier drawn image and redraws it from it (`POST /api/images/{id}/build-on`), or unlinks it (`DELETE`).
-- Redrawing the earlier image leaves the later ones drawn from its old version; the card says so and offers **Redraw them to match** (`POST /api/images/{id}/redraw-dependents`).
-- The opening image and the closing meme stand on their own, and uploads cannot be built on (they have no source).
+- The planner sets `builds_on` on an image slot to the id of the earlier image it extends (`ImageSlot.builds_on`); `normalize_slots` keeps only links to an earlier image still in the post.
+- The later image waits for the earlier one, then is designed with that image's source in the prompt (`ImageService._builds_on`): a chart copies the base chart's data rows, scales, colours and size; other kinds reuse the palette, shapes, labels and layout.
+- **Builds on** on the card links or unlinks an image (`POST`/`DELETE /api/images/{id}/build-on`). Redrawing the earlier image offers **Redraw them to match** (`POST /api/images/{id}/redraw-dependents`).
+- The opening image and the closing meme stand on their own, and uploads cannot be built on.
 
 ## Text that follows the image
 
-An image and the sentences around it should agree. Two things keep them in step (`writer/image_text.py`, `writer/add_image.py`).
+An image and the sentences around it should agree (`writer/image_text.py`, `writer/add_image.py`).
 
-**After a redraw, the text is checked.** When Redraw, New idea, a meme format or pitch, an opening style or pitch, **Edit** or *Redraw all* changes what an image is, the same job asks Claude for small find/replace edits to any sentence that described the old picture (a "Drake" line after the meme became a different format, "the left column" after the labels changed) (`prompts/image_text_sync.md`, task `image text sync`). Claude is told what each image was and what it is now (`describe_image`: kind, purpose, meme format and joke, opening style and idea, alt text, caption) and returns no edits when the text never mentioned the picture, so most redraws change nothing and cost one cheap call. Redraw all makes one combined call after every image is drawn. When text changes, the image card shows a note and the change is one **Undo last change** away (`Project.revisions`, kind `image`). The check never fails a redraw (a failure is reported as `text_error`), is skipped while another text job runs, and does not run for uploads, version restores, a meme's **Words** (you typed them) or the redraws a feedback tweak makes (the text was just written for them).
+**After a redraw, the text is checked.** When Redraw, *New idea*, another idea or format, **Edit** or *Redraw all* changes what an image is, the same job asks Claude for small find/replace edits to any sentence that described the old picture (`prompts/image_text_sync.md`), given what each image was and is now (`describe_image`). Most redraws change nothing. When text changes, the card shows a note and **Undo last change** reverts it (`Project.revisions`, kind `image`). The check never fails a redraw (`text_error`), is skipped while another text job runs, and does not run for uploads, version restores, finalist picks, **Words** or a feedback tweak's own redraws.
 
-**Add an image at a highlight.** Highlight text in the Preview (or the Markdown editor) and click **Add image** (`POST /api/projects/{id}/images`, job `add_image`, one of the text jobs). Claude (`prompts/image_add.md`, task `image placement`) picks the kind that adds the most (diagram, chart, illustration or icon), what it shows, the paragraph or sentence it follows, and any adjacent sentence that should change ("as the diagram below shows"). Code then picks the break: the end of the paragraph, or a split after the sentence when the paragraph is long; never inside a code block, list, table or quote, never between a lead-in ("Here is the file:") and its example, never after the closing meme (`place_placeholder`). The image gets the next free `imgN` slot in the plan (so later edits and regenerations keep it) and its row is put in reading order. At most 15 images per post. **Undo last change** takes the image and its text edits out together.
+**Add an image at a highlight.** Highlight text in the Preview (or the Markdown editor) and click **Add image** (`POST /api/projects/{id}/images`, job `add_image`). Claude (`prompts/image_add.md`) picks the kind, what it shows, the paragraph or sentence it follows and any adjacent sentence to change. Code picks a safe break (`place_placeholder`: never inside a code block, list, table or quote, never between a lead-in and its example, never after the closing meme), adds the next `imgN` slot to the plan and puts the row in reading order. At most 15 images per post. **Undo last change** takes the image and its text edits out together.
+
+## The Cartoon Character Kit
+
+The author's own Cartoon Character Kit (sheets in the reference library's `Cartoon Character Kit/` folder) sets the house style of the cast in two ways:
+
+- **Style reference.** Its character sheet (`ReferenceLibrary.cast_sheet()`) shows the designer and judge what the house ghost and robot look like; the figure library's `ghost` and `robot` styles (and the `cool` sunglasses expression) were drawn from it.
+- **Painted meme settings** (`images/memes/settings.py`). The kit's meme setting sheet paints the places famous memes happen: the street of *Distracted*, the garden of *Is this a...?*, the burning room of *This is fine*, the meadow of *Right? Right?*, the basement of *Pointing twins*. A staged format with a setting is drawn over that painting, enlarged and softly blurred like a photo's background, with the code-drawn cast in front.
+
+Only the settings and the house characters are used. The kit's meme sheets, which show real people, are only cut for their painted settings; they are never sent as a cast reference and no one's likeness is drawn. Without the kit on the machine, every format keeps its code backdrop.
+
+## Quality loop
+
+### The reference library
+
+`images/references.py` (`ReferenceLibrary`) reads a folder of example images the author collected as the quality bar: `Settings.image_reference_dir`, by default `examples/` at the repository root in development (`%LOCALAPPDATA%\Inferno Ghostwriter\references` in the packaged app). One subfolder per category: `Meme`, `Data Art`, `Cartoon Jokes`, `Others` (diagrams) and `Cartoon Character Kit`. `MEME_REFERENCES` maps each meme format to the file that shows its original. The images are third-party memes and art, so the folder is **git-ignored and never shipped**; nothing depends on it. Without it, the judge simply has no references and the compare galleries show only our side.
+
+### Galleries
+
+Each gallery is free (no model calls) and writes into `data/` (git-ignored):
+
+| Command (in `backend/`) | Shows |
+| --- | --- |
+| `uv run python scripts/meme_gallery.py [--compare] [--refs DIR]` | every meme format; `--compare` puts each next to its original from the reference library. `--real --yes` makes real memes for your latest posts (costs money). |
+| `uv run python scripts/art_gallery.py [--compare]` | every data-art engine in light and dark schemes, the crop band marked; `--compare` adds the `Data Art` references |
+| `uv run python scripts/diagram_gallery.py [--compare]` | every diagram template with sample content; `--compare` adds the `Others` references |
+| `uv run python scripts/figure_sheet.py` | every figure style in every pose, expression, outfit and hair |
+| `uv run python scripts/opening_gallery.py` | every opening template with canned words, the crop band marked; `--palette "#0b1d2a #38bdf8 #f472b6"` shows a brand palette |
+
+Review them by eye after any change to a format, engine, template or figure.
+
+### Eval
+
+```bash
+uv run python evals/image_quality.py --demo   # free wiring check
+uv run python evals/image_quality.py --yes    # real openers and memes for eight posts (costs money)
+```
+
+Each run writes a contact sheet with the finalists, the judge's readings, scores and fixes, and seconds per image, and saves `results.json`, so two runs can be compared before and after a change.
+
+## Adding a style or template
+
+- **An opening style:** add an `OpeningStyle` to `STYLES` in `images/opening/styles.py` (`builder`: `svg`, `template` or `meme`; `suits`; `templates`; `needs_data`; `thumbnail_fit`). An SVG style also needs its drawing rules in `SVG_RULES` in `room.py`. Add canned pitch words to `_DEMO_OPENING_CONCEPTS` in `demo.py`.
+- **An opening template:** a layout function in `templates.py` (or a chart in `charts.py`) that draws on a `Canvas`, a `Template` entry with its limits, listed on its style, and a canned build in `DEMO_OPENING_BUILDS` in `demo.py`. The tests render every template and check its text stays in the crop-safe band.
+- **A diagram template:** a typed spec in `images/diagrams/specs.py`, a layout in `templates.py` registered in `TEMPLATES` with its "use when" line, and sample content in `samples.py`.
+- **A data-art engine:** a module in `images/art/` and an entry in `ENGINES` with the one line Claude reads when choosing.
