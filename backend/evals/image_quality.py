@@ -8,8 +8,8 @@
 Each post is the bundled sample content (the three sample posts) plus short briefs on the blog's core topics. For every
 post the eval makes a fresh opening image and a fresh closing meme through the same rooms the app uses, then writes:
 
-- a contact sheet (``index.html``) with each opener as a feed card (thumbnail crop plus title) and each meme,
-- per image: the render panel's verdict, what blind readers saw in it, the pitch panel's spread, and seconds taken,
+- a contact sheet (``index.html``) with each opener and each meme (and their finalists),
+- per image: the judge's pick and what it saw in each finalist, the pitch judge's spread, and seconds taken,
 - ``results.json`` with the same numbers, so two runs (before and after a change) can be compared.
 
 Output goes to data/image-eval/<timestamp>/ (git-ignored).
@@ -31,8 +31,7 @@ from typing import Any
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker
 from inferno_ghostwriter.images.memes.generate import load_state
-from inferno_ghostwriter.images.opening.feedcard import feed_card
-from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom, fit_of
+from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom
 from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
 from inferno_ghostwriter.images.opening.styles import STYLES
 
@@ -111,16 +110,17 @@ async def run(args: argparse.Namespace) -> int:
             started = time.monotonic()
             result = await room.make("", ctx, art)
             state = load_opening_state(result.spec) or {}
-            (out / f"{k}-opening.png").write_bytes(feed_card(result.png, title, fit=fit_of(state)))
+            (out / f"{k}-opening.png").write_bytes(result.png)
+            for f, finalist in enumerate(result.finalists[1:], start=1):
+                (out / f"{k}-opening-finalist{f}.png").write_bytes(finalist.png)
             review = state.get("review") or {}
             row["opening"] = {
                 "seconds": round(time.monotonic() - started, 1),
                 "style": state.get("style"),
                 "scheme": state.get("scheme"),
-                "verdict": review.get("verdict") or ("skipped" if review.get("skipped") else ""),
+                "judged": not review.get("skipped"),
                 "why": review.get("why", ""),
-                "readings": (review.get("panel") or {}).get("readings", []),
-                "match": (review.get("panel") or {}).get("match", []),
+                "finalists": [{"label": f.label, "score": f.score, "reads_as": f.reads_as} for f in result.finalists],
                 "pitch_totals": [round(float((c.get("panel") or {}).get("total", 0)), 1) for c in state.get("concepts", [])],
             }
         if args.only in ("", "meme"):
@@ -133,12 +133,10 @@ async def run(args: argparse.Namespace) -> int:
             row["meme"] = {
                 "seconds": round(time.monotonic() - started, 1),
                 "format": state.get("format"),
-                "look": state.get("look"),
                 "scheme": state.get("scheme"),
-                "verdict": review.get("verdict") or ("skipped" if review.get("skipped") else ""),
+                "judged": not review.get("skipped"),
                 "why": review.get("why", ""),
-                "readings": (review.get("panel") or {}).get("readings", []),
-                "match": (review.get("panel") or {}).get("match", []),
+                "finalists": [{"label": f.label, "score": f.score, "reads_as": f.reads_as} for f in meme.finalists],
                 "alt": meme.alt,
             }
         results.append(row)

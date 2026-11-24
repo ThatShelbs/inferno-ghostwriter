@@ -24,7 +24,6 @@ from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom,
 from inferno_ghostwriter.images.opening.specs import OpeningBuild, OpeningIdeas
 from inferno_ghostwriter.images.opening.styles import BY_ID, STYLES, clean_style, eligible, suggested
 from inferno_ghostwriter.images.opening.templates import TEMPLATES, apply_words, draw, slot_texts, validate
-from inferno_ghostwriter.images.panel import FinalPick
 from inferno_ghostwriter.llm.base import Citation, LLMImagesUnsupportedError
 from inferno_ghostwriter.writer.dials import Dials, resolve
 from inferno_ghostwriter.writer.formulas import ARTICLE_TYPES, OPENERS
@@ -174,31 +173,6 @@ def test_waterfall_steps_may_be_differences_but_words_may_not() -> None:
 # -- the room ------------------------------------------------------------------------------------
 
 
-async def test_auto_pitches_mix_styles_and_the_panel_picks_the_winner() -> None:
-    llm = FakeLLM()
-    room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
-    result = await room.make("", context(), ART)
-    state = load_state(result.spec)
-    assert state is not None and state["mode"] == "auto" and len(state["concepts"]) == 6
-    styles = [c["style"] for c in state["concepts"]]
-    assert styles.count("editorial") >= 2 and "data_art" in styles and styles[0] == "cheat_sheet"
-    assert state["chosen"] == 0 and state["style"] == "cheat_sheet" and state["template"] == "cheat_grid"
-    assert all(set(c["panel"]) >= {"total", "vetoed", "note", "seats"} for c in state["concepts"])
-    assert state["review"]["verdict"] == "passed" and result.provider == "claude-opening" and state["scheme"]
-    # The pitch panel is many seats at once on mixed models; the two best concepts are built and judged as pictures.
-    tasks = llm.tasks()
-    assert tasks[0] == "opening ideas" and {"panel scroller", "panel art_director", "panel fact_checker"} <= set(tasks)
-    assert {c["model"] for c in llm.calls if c["task"].startswith("panel ")} >= {"claude-haiku-5-5", "claude-sonnet-5-5"}
-    assert len(state["review"]["candidates"]) == 2 and "opening scene" in tasks
-    assert next(c for c in llm.calls if c["task"] == "panel final pick")["images"] == 2
-    pitch = llm.calls[0]["prompt"]
-    assert (
-        "Pitch exactly 6" in pitch
-        and "at least two concepts are open visual metaphors" in pitch
-        and "plinko" in llm.calls[0]["system"][0].text
-    )
-
-
 async def test_a_pitch_missing_the_open_styles_is_sent_back_once(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = FakeLLM()
     room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
@@ -291,43 +265,33 @@ class NoEyesLLM(FakeLLM):
         return await super().structured(task=task, schema=schema, **kwargs)
 
 
-async def test_the_render_review_is_skipped_without_image_input_and_a_failure_is_redrawn_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    llm = NoEyesLLM()
-    room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
-    state = load_state((await room.make("", context(), ART)).spec)
-    assert state and state["review"]["skipped"] is True
+async def test_a_visual_metaphor_is_claude_svg_with_library_figures_in_a_house_scheme() -> None:
+    from inferno_ghostwriter.images.specs import SvgSpec
 
-    picky = FakeLLM()
-    room = OpeningRoom(picky, Settings(), MemeMaker(picky, Settings()))
-    original = picky.structured
+    class FigureLLM(FakeLLM):
+        """Draws the metaphor with one library figure, as Claude does when a person helps the idea."""
 
-    async def strict(**kwargs: Any) -> Any:
-        if kwargs["schema"] is FinalPick:
-            await original(**kwargs)
-            return FinalPick(chosen=0, fix="Use fewer, larger tiles.", why="Clearest at a glance.")
-        return await original(**kwargs)
+        async def structured(self, *, task: str, schema: type[BaseModel], **kwargs: Any) -> Any:
+            result = await super().structured(task=task, schema=schema, **kwargs)
+            if schema is SvgSpec and task == "opening editorial drawing":
+                svg = result.svg.replace("</svg>", '<use href="#fig-bean-pointing" x="100" y="300" width="160" height="300"/></svg>')
+                return result.model_copy(update={"svg": svg})
+            return result
 
-    monkeypatch.setattr(picky, "structured", strict)
-    state = load_state((await room.make("", context(), ART)).spec)
-    builds = [c for c in picky.calls if c["task"] == "opening cheat_grid build"]
-    assert len(builds) == 2 and "Use fewer, larger tiles." in builds[1]["prompt"]
-    assert state and state["review"]["verdict"] == "redrawn"
-
-
-async def test_a_visual_metaphor_is_staged_from_the_kit_in_a_house_scheme() -> None:
-    llm = FakeLLM()
+    llm = FigureLLM()
     room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
     result = await room.make("", context(), ART, style="editorial")
     state = load_state(result.spec)
-    assert state and state["style"] == "editorial" and state["scene"]["characters"][0]["kind"] == "ghost"
-    assert result.provider == "claude-scene" and state["scheme"].split(":")[0] in ("inferno", "magma", "viridis")
-    prompt = next(c for c in llm.calls if c["task"] == "opening scene")["prompt"]
-    assert "Layouts:" in prompt and "Expressions:" in prompt and "palette on a" in prompt
+    assert state and state["style"] == "editorial" and result.provider == "claude-svg"
+    assert state["scheme"].split(":")[0] in ("inferno", "magma", "viridis")
+    prompt = next(c for c in llm.calls if c["task"] == "opening editorial drawing")["prompt"]
+    assert "fig-<style>-<pose>" in prompt and "never draw people or characters yourself" in prompt
+    # The figure's symbol is added after the lint, so the drawing renders whole.
+    assert '<symbol id="fig-bean-pointing"' in state["svg"]
     with Image.open(io.BytesIO(result.png)) as img:
         assert img.size == (1600, 900)
-    # An edit restages the stored scene.
-    edited = await room.edit(result.spec, "Make the ghost look smug", context(), ART)
-    assert "The current scene to edit" in llm.calls[-1]["prompt"] and load_state(edited.spec)
+    edited = await room.edit(result.spec, "Make the figure point left", context(), ART)
+    assert "The current SVG to edit" in llm.calls[-1]["prompt"] and load_state(edited.spec)
 
 
 async def test_an_opening_meme_is_pitched_by_the_meme_room_as_an_opener() -> None:

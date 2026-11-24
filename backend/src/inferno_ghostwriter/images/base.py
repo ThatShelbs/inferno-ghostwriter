@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import re
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 
 from PIL import Image
 
@@ -59,3 +60,24 @@ def thumbnail_png(png: bytes, width: int = 800) -> bytes:
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue()
+
+
+@dataclass
+class Drawn:
+    """One drawn image: what a room hands back to the image service.
+
+    ``finalists`` are the best candidates of a fresh room run (this one included), each a ``Drawn`` with its own
+    ``spec``; the author can swap between them with no model call. ``label``/``score``/``reads_as`` describe a finalist.
+    """
+
+    png: bytes
+    width: int
+    height: int
+    provider: str
+    spec: str
+    alt: str
+    caption: str
+    label: str = ""
+    score: float | None = None
+    reads_as: str = ""
+    finalists: list[Drawn] = field(default_factory=list)

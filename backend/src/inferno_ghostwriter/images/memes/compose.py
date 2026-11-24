@@ -14,22 +14,52 @@ from PIL import Image, ImageDraw
 
 from inferno_ghostwriter.images.base import ImageProviderError
 from inferno_ghostwriter.images.kit.props import Stage
-from inferno_ghostwriter.images.kit.style import kit_style
 from inferno_ghostwriter.images.memes import charts
 from inferno_ghostwriter.images.memes.formats import ArtRegion, Box, MemeFormat
-from inferno_ghostwriter.images.memes.looks import BY_ID as LOOKS_BY_ID
-from inferno_ghostwriter.images.memes.looks import DEFAULT_LOOK, Theme
+from inferno_ghostwriter.images.memes.settings import settings_for
 from inferno_ghostwriter.images.memes.specs import MemeDatum, MemeText
 from inferno_ghostwriter.images.memes.stagings import Cast, stage_art
 from inferno_ghostwriter.images.memes.text import STYLES, Fitted, draw_fitted, fit_text
-from inferno_ghostwriter.images.palettes import Scheme
+from inferno_ghostwriter.images.palettes import INK_DARK, SURFACES, Scheme, brand_scheme, contrast, house_ramp, scheme
 from inferno_ghostwriter.images.render import SVG_NS, parse_xml, svg_to_png
 
 XLINK_NS = "http://www.w3.org/1999/xlink"
 INK = "#14101f"
 BUBBLE_PAD = 24
 BUBBLE_TAIL = 46
-INFERNO = LOOKS_BY_ID[DEFAULT_LOOK].theme
+
+
+@dataclass(frozen=True)
+class Theme:
+    """The colors the composer paints templates with (comic gutters, chat header, chart marks, alignment bands)."""
+
+    dark: str  # gutters, headers, dark surfaces
+    paper: str  # light chart and card backgrounds
+    ink: str  # outlines, frames, bubble borders
+    accents: tuple[str, ...]  # six chart and avatar colors, most vivid first
+    bands: tuple[str, str, str]  # three dark colors that carry white text
+    bubble_fill: str = "#ffffff"
+
+
+def theme_for(sch: Scheme) -> Theme:
+    """The template colors in a scheme."""
+    light = brand_scheme(sch.ramp, "white") if sch.ramp_id == "brand" else scheme(sch.ramp_id, "white")
+    dark = sch.bg if sch.dark else mix(sch.ramp[1], "#000000", 0.15)
+    paper = sch.bg if not sch.dark else SURFACES["paper"]
+    bands = [c for c in reversed(sch.ramp) if contrast(c, "#ffffff") >= 4.5]
+    if len(bands) >= 3:
+        picked = (bands[0], bands[len(bands) // 2], bands[-1])
+    else:
+        deep = sorted(sch.ramp, key=lambda c: contrast(c, "#ffffff"))
+        picked = (deep[-1], deep[-1], deep[-1]) if len(deep) < 3 else (deep[-3], deep[-2], deep[-1])
+    return Theme(dark, paper, INK_DARK, light.accents, picked)
+
+
+def scheme_for(palette: tuple[str, ...] = (), sch: Scheme | None = None) -> Scheme:
+    """The scheme a meme is painted in: a brand palette (3+ colors that are not a house ramp) wins."""
+    if len(palette) >= 3 and house_ramp(palette) is None:
+        return brand_scheme(palette)
+    return sch or scheme("inferno", "near_black")
 
 
 def mix(a: str, b: str, t: float) -> str:
@@ -259,6 +289,76 @@ def _joke_pie(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], col
     return scene
 
 
+def _by_size(values: list[float], colors: list[str]) -> list[str]:
+    """Colors per entry so the biggest one (the punchline) gets the most vivid color, the next the second, and so on."""
+    order = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+    out = [""] * len(values)
+    for rank, i in enumerate(order):
+        out[i] = colors[rank % len(colors)]
+    return out
+
+
+def _flat_pie(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """The online-chart-maker pie: title on top, flat pie on the left, a legend of squares on the right."""
+    slices = charts.pie_slices(data)
+    colors = _by_size([v for _, v in slices], colors)
+    scene = Scene(under=[charts.flat_pie_svg(slices, colors, 400, 500, 300)])
+    top = 500 - len(slices) * 74 // 2
+    for i, (label, _) in enumerate(slices):
+        y = top + i * 74
+        scene.under.append(
+            f'<rect x="760" y="{y + 18}" width="34" height="34" fill="{colors[i % len(colors)]}" stroke="#555555" stroke-width="2"/>'
+        )
+        scene.texts.append(Placed((810, y + 4, 360, 64), label, "ui", align="left", fill="#333333"))
+    return scene
+
+
+def _joke_bar(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """A serious bar chart: light gridlines, labeled bars, values on top."""
+    bars = charts.bar_values(data)
+    colors = _by_size([v for _, v in bars], colors)
+    left, right, base, top = 120, 1140, 740, 220
+    peak = max(v for _, v in bars) or 1
+    slot = (right - left) / len(bars)
+    width = slot * 0.62
+    grid = "".join(
+        f'<line x1="{left}" y1="{base - (base - top) * k / 4:.0f}" x2="{right}" y2="{base - (base - top) * k / 4:.0f}" '
+        f'stroke="#e4e4e4" stroke-width="2"/>'
+        for k in range(1, 5)
+    )
+    scene = Scene(under=[grid + f'<line x1="{left}" y1="{base}" x2="{right}" y2="{base}" stroke="#555555" stroke-width="3"/>'])
+    for i, (label, value) in enumerate(bars):
+        h = (base - top) * value / peak
+        x = left + i * slot + (slot - width) / 2
+        scene.under.append(
+            f'<rect x="{x:.0f}" y="{base - h:.0f}" width="{width:.0f}" height="{h:.0f}" rx="6" fill="{colors[i % len(colors)]}"/>'
+        )
+        scene.texts.append(Placed((round(x - 20), round(base - h - 48), round(width + 40), 42), f"{value:g}", "ui_bold", fill="#333333"))
+        scene.texts.append(Placed((round(left + i * slot), base + 12, round(slot), 76), label, "ui", fill="#333333"))
+    return scene
+
+
+def _labeled_map(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """An unnamed outline landmass with small labels scattered across it, like a hand-annotated map joke."""
+    import math
+    import zlib
+
+    labels = [d.label.strip() for d in data if d.label.strip()][:8]
+    if len(labels) < 3:
+        raise ImageProviderError("The map needs 3-8 labels in `data`.")
+    seed = zlib.crc32("|".join(labels).encode())
+    path = charts.blob_path(seed, 640, 400, 470, 300)
+    scene = Scene(under=[f'<path d="{path}" fill="#ffffff" stroke="#222222" stroke-width="5" stroke-linejoin="round"/>'])
+    # Labels sit on a ring inside the coast, the last one in the middle.
+    ring = labels[:-1]
+    for i, label in enumerate(ring):
+        t = 2 * math.pi * i / len(ring) - math.pi / 2
+        x, y = 640 + 250 * math.cos(t), 400 + 150 * math.sin(t)
+        scene.texts.append(Placed((round(x - 130), round(y - 24), 260, 48), label.upper(), "ui_bold", fill="#222222"))
+    scene.texts.append(Placed((510, 376, 260, 48), labels[-1].upper(), "ui_bold", fill="#222222"))
+    return scene
+
+
 def _venn(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
     three = bool(texts.get("c", "").strip())
     if three:
@@ -377,6 +477,9 @@ SCENES: dict[str, Callable[[MemeFormat, dict[str, str], list[MemeDatum], list[st
     "midwit_bell_curve": _midwit,
     "gru_plan": _gru,
     "joke_pie_3d": _joke_pie,
+    "joke_pie": _flat_pie,
+    "joke_bar": _joke_bar,
+    "labeled_map": _labeled_map,
     "venn": _venn,
     "comic_strip_3": _comic,
     "right_right": _comic,
@@ -403,18 +506,16 @@ def compose(
     data: list[MemeDatum] | None = None,
     *,
     palette: tuple[str, ...] = (),
-    theme: Theme | None = None,
-    look: str = DEFAULT_LOOK,
     sch: Scheme | None = None,
     cast: Cast | None = None,
     panels: list[dict] | None = None,
 ) -> tuple[bytes, int, int]:
     """Render one meme to PNG; raises ImageProviderError when the build cannot be drawn.
 
-    A brand ``palette`` (3+ hex colors) recolors the template's chart marks; otherwise they use the ``theme``'s accents
-    (inferno when none is given)."""
+    A brand ``palette`` (3+ hex colors) recolors the template; otherwise the scheme ``sch`` does (inferno when none)."""
     data = data or []
-    theme = theme or INFERNO
+    sch = scheme_for(palette, sch)
+    theme = theme_for(sch)
     colors = list(palette) if len(palette) >= 3 else list(theme.accents)
     words = {name: t.text.strip() for name, t in texts.items()}
     if fmt.id == "spurious_correlation":
@@ -476,7 +577,7 @@ def compose(
 
     regions = "".join(region_svg(region, art[region.name]) for region in fmt.regions if art.get(region.name, "").strip())
     if fmt.staged:
-        stage = Stage(sch or LOOKS_BY_ID.get(look, LOOKS_BY_ID[DEFAULT_LOOK]).default_scheme, look, prefix=f"m-{fmt.id}")
+        stage = Stage(sch, prefix=f"m-{fmt.id}", settings=settings_for(fmt.id))
         regions = stage_art(fmt, words, cast or {}, stage, panels) + regions
     svg = (
         f'<svg xmlns="{SVG_NS}" xmlns:xlink="{XLINK_NS}" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
@@ -487,38 +588,9 @@ def compose(
 
     with Image.open(io.BytesIO(png)) as source:
         img = source.convert("RGB")
-    cell = kit_style(look).pixel
-    if cell:
-        # Pixel looks: the art is snapped to a coarse grid; the text drawn next stays crisp.
-        small = img.resize((max(1, img.width // cell), max(1, img.height // cell)), Image.Resampling.BOX)
-        img = small.resize((small.width * cell, small.height * cell), Image.Resampling.NEAREST).crop((0, 0, img.width, img.height))
-        if img.size != (width, height):
-            img = img.resize((width, height), Image.Resampling.NEAREST)
     draw = ImageDraw.Draw(img)
     for fitted, box, style_name, align, valign, fill in drawn:
         draw_fitted(draw, fitted, box, STYLES[style_name], align=align, valign=valign, fill=fill)
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue(), img.width, img.height
-
-
-MASCOT_SCENE = """
-<defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b0c41"/><stop offset="1" stop-color="#a52c60"/></linearGradient>
-  <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#fcffa4"/><stop offset="1" stop-color="#fb9b06" stop-opacity="0"/></radialGradient>
-  <linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a52c60"/><stop offset="0.6" stop-color="#ed6925"/><stop offset="1" stop-color="#f7d13d"/></linearGradient>
-</defs>
-<rect width="1080" height="1080" fill="url(#bg)"/>
-<circle cx="540" cy="560" r="330" fill="#ed6925" opacity="0.16"/>
-<ellipse cx="540" cy="840" rx="260" ry="34" fill="#000004" opacity="0.3"/>
-<path d="M340,800 C300,560 340,300 540,300 C740,300 780,560 740,800 C700,760 670,830 630,780 C590,830 560,760 520,790 C480,830 450,760 410,800 C380,780 360,830 340,800 Z" fill="url(#body)" stroke="#14101f" stroke-width="6" stroke-linejoin="round"/>
-<ellipse cx="470" cy="500" rx="34" ry="50" fill="#1b0c41"/><ellipse cx="610" cy="500" rx="34" ry="50" fill="#1b0c41"/>
-<ellipse cx="480" cy="484" rx="12" ry="17" fill="#fcffa4"/><ellipse cx="620" cy="484" rx="12" ry="17" fill="#fcffa4"/>
-<path d="M500,580 Q540,615 580,580" stroke="#1b0c41" stroke-width="10" fill="none" stroke-linecap="round"/>
-<rect x="400" y="700" width="280" height="150" rx="14" fill="#2a1b47" stroke="#14101f" stroke-width="6"/>
-<rect x="416" y="714" width="248" height="112" rx="8" fill="#4a0c6b"/>
-<circle cx="540" cy="770" r="22" fill="#f7d13d" opacity="0.9"/>
-<path d="M740,640 C800,560 840,470 880,380" stroke="#fcffa4" stroke-width="14" fill="none" stroke-linecap="round"/>
-<path d="M880,380 C930,360 960,330 970,290 C930,320 900,330 880,380 Z" fill="#fcffa4" stroke="#14101f" stroke-width="4"/>
-<circle cx="540" cy="226" r="0" fill="url(#glow)"/>
-"""

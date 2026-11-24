@@ -112,9 +112,10 @@ def lint(
         if not isinstance(el.tag, str):
             continue
         for value in el.attrib.values():
-            dangling.update(m for m in _REF.findall(value) if m not in ids)
+            dangling.update(m for m in _REF.findall(value) if m not in ids and not m.startswith("fig-"))
         href = el.get("href") or el.get("{http://www.w3.org/1999/xlink}href") or ""
-        if href.startswith("#") and href[1:] not in ids:
+        # Figures from the library (``#fig-...``) are injected after the lint, so they count as defined.
+        if href.startswith("#") and href[1:] not in ids and not href.startswith("#fig-"):
             dangling.add(href[1:])
     if dangling:
         problems.append(

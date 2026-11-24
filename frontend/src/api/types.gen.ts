@@ -126,6 +126,10 @@ export interface BaselineDiffOut {
   segments: DiffSegment[];
 }
 
+export interface Body_set_reference_api_images__image_id__reference_post {
+  file: string;
+}
+
 export interface Body_upload_image_api_images__image_id__upload_post {
   file: string;
 }
@@ -259,6 +263,15 @@ export interface EvolutionOut {
 
 export interface EvolveIn {
   kind: "edits" | "secret_sauce";
+}
+
+export interface FinalistOut {
+  index: number;
+  url: string;
+  label: string;
+  score: number | null;
+  reads_as: string;
+  current: boolean;
 }
 
 export interface FingerprintOut {
@@ -537,6 +550,13 @@ export interface ImageEditIn {
   instruction: string;
 }
 
+export interface ImageFormatOut {
+  id: string;
+  label: string;
+  group: string;
+  when_to_use: string;
+}
+
 export interface ImageHistoryOut {
   index: number;
   url: string;
@@ -563,12 +583,24 @@ export interface ImageOut {
   status: string;
   error: string | null;
   history: ImageHistoryOut[];
-  meme?: MemeInfoOut | null;
-  opening?: OpeningInfoOut | null;
+  room?: ImageRoomOut | null;
+  finalists?: FinalistOut[];
+  reference_url?: string | null;
   builds_on?: string;
   remix?: RemixOut | null;
   remix_dimensions?: string[];
-  rating?: number;
+}
+
+export interface ImageRoomOut {
+  room: string;
+  format: string;
+  format_label: string;
+  why?: string;
+  ideas_left?: number;
+  fallback_from?: string;
+  pitches?: PitchOut[];
+  slots?: WordSlotOut[];
+  sources?: SourceOut[];
 }
 
 export interface ImageUpdate {
@@ -644,109 +676,9 @@ export interface LinkedInPostOut {
   written_by: "claude" | "template";
 }
 
-export interface MemeFormatOut {
-  id: string;
-  name: string;
-  family: string;
-  family_label: string;
-  when_to_use: string;
-}
-
-export interface MemeInfoOut {
-  format: string;
-  format_name: string;
-  premise: string;
-  ideas_left: number;
-  has_art: boolean;
-  fallback_from: string;
-  pitches: MemePitchOut[];
-  slots: MemeSlotOut[];
-  look?: string;
-  look_label?: string;
-  review_verdict?: string;
-  review_why?: string;
-  review_readings?: string[];
-}
-
-export interface MemeLookOut {
-  id: string;
-  label: string;
-  description: string;
-  swatch: string[];
-}
-
-export interface MemePitchOut {
-  index: number;
-  format: string;
-  format_name: string;
-  premise: string;
-  words: string[];
-  tried: boolean;
-  current: boolean;
-  panel_score?: number | null;
-}
-
-export interface MemeSlotOut {
-  name: string;
-  hint: string;
-  text: string;
-  max_chars: number;
-  optional: boolean;
-}
-
-export interface MemeWordsIn {
-  words: Record<string, string>;
-}
-
 export interface OpeningCatalogOut {
   styles: OpeningStyleOut[];
   suggested_by_type: Record<string, string[]>;
-}
-
-export interface OpeningInfoOut {
-  style: string;
-  style_label: string;
-  template: string;
-  mode: string;
-  summary: string;
-  ideas_left: number;
-  fallback_from: string;
-  pitches: OpeningPitchOut[];
-  sources: OpeningSourceOut[];
-  review: OpeningReviewOut | null;
-  slots: MemeSlotOut[];
-  thumbnail_fit: string;
-}
-
-export interface OpeningPitchOut {
-  index: number;
-  style: string;
-  style_label: string;
-  template: string;
-  hook: string;
-  concept: string;
-  scores: Record<string, number>;
-  note: string;
-  total: number;
-  ruled_out: boolean;
-  tried: boolean;
-  current: boolean;
-}
-
-export interface OpeningReviewOut {
-  verdict: string;
-  clickability?: number;
-  craft?: number;
-  problems?: string[];
-  note?: string;
-  why?: string;
-  fix?: string;
-  readings?: string[];
-}
-
-export interface OpeningSourceOut {
-  title: string;
-  url: string;
 }
 
 export interface OpeningStyleOut {
@@ -756,10 +688,6 @@ export interface OpeningStyleOut {
   when_to_use: string;
   needs_data: boolean;
   min_humor: number;
-}
-
-export interface OpeningWordsIn {
-  words: Record<string, string>;
 }
 
 export interface PersonaCreate {
@@ -865,6 +793,27 @@ export interface PersonaUpdate {
   pinned_voice_profile_version?: number | null;
 }
 
+export interface PickIn {
+  index: number;
+}
+
+export interface PitchOut {
+  index: number;
+  format: string;
+  format_label: string;
+  hook: string;
+  concept: string;
+  words?: string[];
+  anchor?: string;
+  anchored?: boolean;
+  reads_as?: string;
+  score?: number | null;
+  note?: string;
+  ruled_out?: boolean;
+  tried?: boolean;
+  current?: boolean;
+}
+
 export interface PlaybookEntry {
   text: string;
   project_id?: number | null;
@@ -967,17 +916,11 @@ export interface ProjectUpdate {
   outcome?: "too_early" | "small" | "good" | "viral" | null;
 }
 
-export interface RatingIn {
-  rating: number;
-}
-
 export interface RedrawIn {
   rethink?: boolean;
-  meme_format?: string | null;
-  meme_concept?: number | null;
-  meme_look?: string | null;
-  opening_style?: string | null;
-  opening_concept?: number | null;
+  concept?: number | null;
+  format?: string | null;
+  note?: string;
   tweaks?: Record<string, string> | null;
   improve?: boolean;
 }
@@ -1140,6 +1083,11 @@ export interface SettingsOut {
   demo: boolean;
 }
 
+export interface SourceOut {
+  title: string;
+  url: string;
+}
+
 export interface SurpriseOut {
   spec: Record<string, unknown>;
   archetype: ArchetypeOut;
@@ -1221,4 +1169,16 @@ export interface VoiceProfileVersion {
 export interface VoiceSourceIn {
   source: "archetype" | "random" | "blend" | "interview";
   spec?: Record<string, unknown>;
+}
+
+export interface WordSlotOut {
+  name: string;
+  hint: string;
+  text: string;
+  max_chars: number;
+  optional: boolean;
+}
+
+export interface WordsIn {
+  words: Record<string, string>;
 }

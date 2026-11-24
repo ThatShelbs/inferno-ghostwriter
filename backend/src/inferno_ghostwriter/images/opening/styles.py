@@ -14,7 +14,7 @@ from pydantic import BaseModel
 AUTO = "auto"
 
 # How a style is made: Claude draws SVG, the meme room makes it, or code lays out a template from Claude's words and data.
-Builder = Literal["svg", "meme", "template", "scene"]
+Builder = Literal["svg", "meme", "template"]
 
 
 class OpeningStyle(BaseModel):
@@ -48,10 +48,10 @@ STYLES: list[OpeningStyle] = [
             "The post's central mechanism, acted out by a physical system that behaves the same way: marketing spend as coins "
             "dropping through a plinko board into channel buckets; a single source of truth as several specialists each lighting "
             "one part of an elephant. Specific to this post, labelled with its own terms only when a label is essential, never a "
-            "generic tech scene. Staged with our character kit (likeable characters whose faces carry the emotion) plus one "
-            "custom object for the metaphor."
+            "generic tech scene. Drawn as one clean flat-vector scene; most need no characters, and when a person helps, they "
+            "are simple figures from the figure library (or the house ghost or robot)."
         ),
-        builder="scene",
+        builder="svg",
         always=True,
     ),
     OpeningStyle(

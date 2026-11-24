@@ -50,7 +50,7 @@ flowchart TB
 | `evolution/` | Persona evolution: compares a published post with its generated baseline, reads hits for their secret sauce, and applies approved changes as a new voice profile version and playbook entries (see [evolution](evolution.md)). |
 | `idealab/` | Idea Lab: the source catalog (`catalog.json`, `sources.py`), feed collectors (`collect.py`), web search scouts and the trend digest (`research.py`), the portfolio snapshot (`portfolio.py`), idea writing, duplicate removal and ranking (`ideate.py`), and the jobs (`service.py`; see [Idea Lab](idea-lab.md)). |
 | `authenticity/` | AI-generation detection: a scan calibrated to the author's own samples plus a Claude judge, combined into a 0-100 "reads as human" score. |
-| `images/` | Image design by Claude (SVG and Vega-Lite only), sanitizing renderers, placeholders, credits, redraw history. `images/memes/`: the meme format catalog, the meme generator (pitch, then art where the format has any), the bundled fonts and the composer that owns meme layout and type. |
+| `images/` | Image design by Claude (SVG and Vega-Lite only), sanitizing renderers, placeholders, credits, redraw history. Every image runs one room (pitch, draw candidates, judge, refine, keep finalists): `images/opening/`, `images/memes/` (formats, stagings, the composer that owns meme layout and type, bundled fonts), `images/body.py`; shared pieces in `images/judge.py`, `images/story.py`, `images/figures/`, `images/diagrams/`, `images/art/`, `images/references.py`. See [images.md](images.md). |
 | `export/` | HTML/Markdown rendering and platform bundles, including the LinkedIn carousel (PDF + PPTX) and the X Article teaser post. |
 | `prompts/` | All prompts as Markdown templates. |
 | `demo.py` | Fake Claude used by tests and `--demo`. |
@@ -133,7 +133,8 @@ The first real persona becomes the active one even when the example is on (`api/
 | Research one reference | `web_search` server tool | medium |
 | Weave references in | structured output (`ReferenceEdits`) | medium |
 | Pitch closing memes | structured output (`MemeIdeas`) | high |
-| Draw a meme's art (formats with art only) | structured output (`MemeBuild`) | medium |
+| Pitch in-body images | structured output (`BodyIdeas`) | medium |
+| Judge an image's pitches, then its drawn candidates (one vision call) | structured output (`PitchRanking`, sheet scores; `image_judge`) | medium |
 | Sum up a voice profile for Insights | structured output (`VoiceInsights`) | low |
 | Learn from a published post's edits | structured output (`EvolutionPlan`) | medium |
 | Find a hit's secret sauce | structured output (`SecretSauce`) | medium |

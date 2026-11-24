@@ -37,8 +37,7 @@ import type {
   ImageOut,
   InterviewAnswer,
   InterviewQuestionOut,
-  MemeFormatOut,
-  MemeLookOut,
+  ImageFormatOut,
   RemixDimensionOut,
   OpeningCatalogOut,
   JobOut,
@@ -82,8 +81,7 @@ export const keys = {
   sampleWriting: ['sample-writing'] as const,
   projects: ['projects'] as const,
   project: (id: number) => ['projects', id] as const,
-  memeFormats: ['meme-formats'] as const,
-  memeLooks: ['meme-looks'] as const,
+  imageFormats: (room: string, kind: string) => ['image-formats', room, kind] as const,
   remixOptions: ['remix-options'] as const,
   openingStyles: ['opening-styles'] as const,
   formulaCatalog: ['formula-catalog'] as const,
@@ -602,13 +600,14 @@ export function useIdeaLabMutations() {
   }
 }
 
-/** Every format a closing meme can take; it never changes while the app runs. */
-export const useMemeFormats = (enabled = true) =>
-  useQuery({ queryKey: keys.memeFormats, queryFn: () => api.get<MemeFormatOut[]>('/api/meme-formats'), staleTime: Infinity, enabled })
-
-/** Every look a meme can be drawn in (the Look menu); it never changes while the app runs. */
-export const useMemeLooks = (enabled = true) =>
-  useQuery({ queryKey: keys.memeLooks, queryFn: () => api.get<MemeLookOut[]>('/api/meme-looks'), staleTime: Infinity, enabled })
+/** What an image's room can switch to: meme formats, opening styles (plus the meme bank) or other ways to draw it. */
+export const useImageFormats = (room: string, kind: string, enabled = true) =>
+  useQuery({
+    queryKey: keys.imageFormats(room, kind),
+    queryFn: () => api.get<ImageFormatOut[]>(`/api/image-formats?room=${encodeURIComponent(room)}&kind=${encodeURIComponent(kind)}`),
+    staleTime: Infinity,
+    enabled,
+  })
 
 /** What Remix can change in a redraw (colors, cast, staging, medium); it never changes while the app runs. */
 export const useRemixOptions = (enabled = true) =>
@@ -646,13 +645,14 @@ export function useFormulaMutations() {
   }
 }
 
-/** What a redraw should make: a meme format or stored pitch, or an opening style or stored opening pitch. */
+/** What a redraw should make: one of the image's stored ideas, or new pitches in another format, with an optional steer. */
 export interface RedrawPicks {
-  memeFormat?: string
-  memeConcept?: number
-  memeLook?: string
-  openingStyle?: string
-  openingConcept?: number
+  /** An index from ``image.room.pitches``. */
+  concept?: number
+  /** A meme format, opening style or way to draw it (see useImageFormats). */
+  format?: string
+  /** The author's steer in their own words. */
+  note?: string
   /** Pinned parts of the redraw's twist, e.g. { palette: 'viridis', cast: 'dogs' }; the rest is chosen for you. */
   tweaks?: Record<string, string>
   /** False skips Claude's critique and only tries the twist. */
@@ -667,11 +667,9 @@ export function useImageMutations(projectId: number) {
       mutationFn: ({ id, rethink, ...picks }: { id: number; rethink: boolean } & RedrawPicks) =>
         api.post<JobOut>(`/api/images/${id}/redraw`, {
           rethink,
-          meme_format: picks.memeFormat ?? null,
-          meme_concept: picks.memeConcept ?? null,
-          meme_look: picks.memeLook ?? null,
-          opening_style: picks.openingStyle ?? null,
-          opening_concept: picks.openingConcept ?? null,
+          concept: picks.concept ?? null,
+          format: picks.format ?? null,
+          note: picks.note ?? '',
           tweaks: picks.tweaks ?? null,
           improve: picks.improve ?? true,
         }),
@@ -684,19 +682,14 @@ export function useImageMutations(projectId: number) {
     clearBuildOn: useMutation({ mutationFn: (id: number) => api.del<ImageOut>(`/api/images/${id}/build-on`), onSuccess: refresh }),
     /** Redraw the images that build on this one so they match it again. */
     matchDependents: useMutation({ mutationFn: (id: number) => api.post<JobOut>(`/api/images/${id}/redraw-dependents`) }),
-    /** Retype a code-drawn opening image's words; it is laid out again at once, without asking Claude. */
-    openingWords: useMutation({
-      mutationFn: ({ id, words }: { id: number; words: Record<string, string> }) => api.put<ImageOut>(`/api/images/${id}/opening-words`, { words }),
+    /** Retype an image's words (a meme or a code-drawn opening image); it is drawn again at once, without asking Claude. */
+    words: useMutation({
+      mutationFn: ({ id, words }: { id: number; words: Record<string, string> }) => api.put<ImageOut>(`/api/images/${id}/words`, { words }),
       onSuccess: refresh,
     }),
-    /** Retype a meme's words; it is redrawn at once with the same art, without asking Claude. */
-    memeWords: useMutation({
-      mutationFn: ({ id, words }: { id: number; words: Record<string, string> }) => api.put<ImageOut>(`/api/images/${id}/meme-words`, { words }),
-      onSuccess: refresh,
-    }),
-    /** Thumbs up (1), down (-1) or clear (0); ratings on opening images and memes teach the persona's taste. */
-    rate: useMutation({
-      mutationFn: ({ id, rating }: { id: number; rating: number }) => api.put<ImageOut>(`/api/images/${id}/rating`, { rating }),
+    /** Show another finalist of the image's last fresh run; no call to Claude. */
+    pick: useMutation({
+      mutationFn: ({ id, index }: { id: number; index: number }) => api.post<ImageOut>(`/api/images/${id}/pick`, { index }),
       onSuccess: refresh,
     }),
     /** Redraw every image Claude drew, e.g. after changing the brand kit. */
@@ -705,6 +698,16 @@ export function useImageMutations(projectId: number) {
     edit: useMutation({
       mutationFn: ({ id, instruction }: { id: number; instruction: string }) => api.post<JobOut>(`/api/images/${id}/edit`, { instruction }),
     }),
+    /** Attach a style reference ("make it like this"); the designer and the judge see it on every draw of this image. */
+    setReference: useMutation({
+      mutationFn: ({ id, file }: { id: number; file: File }) => {
+        const form = new FormData()
+        form.append('file', file)
+        return api.post<ImageOut>(`/api/images/${id}/reference`, form)
+      },
+      onSuccess: refresh,
+    }),
+    clearReference: useMutation({ mutationFn: (id: number) => api.del<ImageOut>(`/api/images/${id}/reference`), onSuccess: refresh }),
     upload: useMutation({
       mutationFn: ({ id, file }: { id: number; file: File }) => {
         const form = new FormData()

@@ -143,7 +143,7 @@ With no formula in force the room is told nothing extra. The other images need n
 
 ### The opening image
 
-The article type and the opener also decide which [opening image styles](opening-images.md) suit the post: a how-to suggests a cheat sheet or framework diagram, a comparison a versus split or data chart, a *Surprising number* or *Show the result first* opener a big number or data chart, a joke opener an opening meme. On Auto the panel pitches across those styles plus open visual metaphors and data art, and the room is told the formula. The opening image is not part of the formula; choose it next to the formula on the new-post form.
+The article type and the opener also decide which [opening image styles](images.md#opening-images) suit the post: a how-to suggests a cheat sheet or framework diagram, a comparison a versus split or data chart, a *Surprising number* or *Show the result first* opener a big number or data chart, a joke opener an opening meme. On Auto the room pitches across those styles plus open visual metaphors and data art, and the room is told the formula. The opening image is not part of the formula; choose it next to the formula on the new-post form.
 
 Stored values are catalog ids. An id that is no longer in the catalog resolves to automatic, so removing a style never breaks an old post.
 

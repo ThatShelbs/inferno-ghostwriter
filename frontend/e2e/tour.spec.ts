@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 
+import { postImages } from './post'
 import { shot } from './screenshots'
 
 // Tests share one server and run in order: the tour looks at the seeded example, then removes it
@@ -15,7 +16,7 @@ test('demo opens on a finished example post', async ({ page }) => {
 
   await page.getByRole('link', { name: 'With Great Models Comes Great Responsibility (and a Pager)' }).last().click()
   await expect(page.getByText('This is an example post')).toBeVisible()
-  await expect(page.locator('figure img')).toHaveCount(4, { timeout: 30_000 })
+  await expect(postImages(page)).toHaveCount(4, { timeout: 30_000 })
   await expect(page.getByText(/Author: Sample Author; Made with/).first()).toBeVisible()
   await shot(page, 'getting-started/05-demo-example')
 
@@ -139,5 +140,5 @@ test('with no files of your own: remove the example, start from a ready-made voi
   await page.getByRole('button', { name: 'Use an example prompt' }).click()
   await page.getByRole('button', { name: /Write my post/ }).click()
   await expect(page.getByRole('heading', { name: 'Title', exact: true })).toBeVisible({ timeout: 90_000 })
-  await expect(page.locator('figure img')).toHaveCount(4)
+  await expect(postImages(page)).toHaveCount(4)
 })

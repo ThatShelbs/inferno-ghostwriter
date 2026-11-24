@@ -1,17 +1,30 @@
-"""Fills and outlines for kit shapes in a look's treatment (flat, soft gradient, 3D volume, halftone, line, marker).
+"""Fills and outlines for the kit's backdrops and props in a look's treatment (flat, soft gradient, 3D volume,
+halftone, line, marker).
 
-Every shape is painted through a ``Painter`` so one character is consistent: the same light direction, outline weight
-and shading on its head, body, arms and props. Gradient ids are unique per painter (``prefix``), so many characters
-can share one SVG.
+Every shape is painted through a ``Painter`` so one scene is consistent: the same light direction, outline weight and
+shading on every prop. Gradient ids are unique per painter (``prefix``), so many pieces can share one SVG.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from inferno_ghostwriter.images.kit.face import f
 from inferno_ghostwriter.images.kit.style import KitStyle
 from inferno_ghostwriter.images.palettes import mix
+
+
+def f(v: float) -> str:
+    """A number for SVG: integers bare, others to one decimal."""
+    return f"{v:.1f}".rstrip("0").rstrip(".") if abs(v - round(v)) > 1e-6 else str(round(v))
+
+
+def sparkle_path(x: float, y: float, r: float) -> str:
+    """A four-point sparkle centered at (x, y)."""
+    k = r * 0.28
+    return (
+        f"M{f(x)},{f(y - r)} Q{f(x + k)},{f(y - k)} {f(x + r)},{f(y)} Q{f(x + k)},{f(y + k)} {f(x)},{f(y + r)} "
+        f"Q{f(x - k)},{f(y + k)} {f(x - r)},{f(y)} Q{f(x - k)},{f(y - k)} {f(x)},{f(y - r)} Z"
+    )
 
 
 @dataclass
@@ -19,7 +32,7 @@ class Painter:
     style: KitStyle
     line: str
     prefix: str
-    scale: float = 1.0  # line widths are divided by it, so outlines keep their weight after the character is scaled
+    scale: float = 1.0  # line widths are divided by it, so outlines keep their weight after the piece is scaled
     ground: str = "none"  # line looks: the paper color that fills shapes, so linework stays opaque
     defs: list[str] = field(default_factory=list)
     _n: int = 0

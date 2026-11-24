@@ -2,7 +2,7 @@ import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 
 import type { ImageOut, RemixDimensionOut } from '../../api/types.gen'
-import { Button, Dialog, Field, Select, Switch } from '../../components/ui'
+import { Button, Dialog, Field, Select, Switch, Textarea } from '../../components/ui'
 import { remixSummary } from '../../lib/remix'
 
 const SURPRISE = 'auto'
@@ -23,10 +23,11 @@ export function RemixDialog({
   image: ImageOut
   /** The whole catalog; only the dimensions this image can vary are shown */
   dimensions: RemixDimensionOut[]
-  onRemix: (tweaks: Record<string, string>, improve: boolean) => void
+  onRemix: (tweaks: Record<string, string>, improve: boolean, note: string) => void
 }) {
   const [picks, setPicks] = useState<Record<string, string>>({})
   const [improve, setImprove] = useState(true)
+  const [note, setNote] = useState('')
   const shown = dimensions.filter((d) => (image.remix_dimensions ?? []).includes(d.id))
   const last = remixSummary(image.remix)
   const pinned = Object.fromEntries(Object.entries(picks).filter(([, id]) => id && id !== SURPRISE))
@@ -37,7 +38,7 @@ export function RemixDialog({
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
-          onRemix(pinned, improve)
+          onRemix(pinned, improve, note.trim())
         }}
       >
         <p className="text-sm text-muted">
@@ -69,6 +70,13 @@ export function RemixDialog({
             </Field>
           )
         })}
+        <Field
+          label="Anything else? (optional)"
+          hint="Steer it in your own words: 'fewer words', 'darker', 'more like the original'."
+          htmlFor={`remix-note-${image.id}`}
+        >
+          <Textarea id={`remix-note-${image.id}`} rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
+        </Field>
         <div className="flex items-center gap-3">
           <Switch checked={improve} onChange={setImprove} label="Critique first" />
           <span className="text-sm">Let Claude critique the current image first and fix its weakest point</span>

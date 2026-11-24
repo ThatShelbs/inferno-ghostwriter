@@ -13,7 +13,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from inferno_ghostwriter.legacy import adopt_legacy_env, move_legacy_app_folder
@@ -69,39 +68,18 @@ class Settings(BaseSettings):
     effort_image_improve: Effort = "medium"
     # The meme writers' room: pitching and judging five jokes is worth more thought than drawing one.
     effort_meme_ideas: Effort = "high"
-    # Judge memes as pictures (the render panel and the final pick, see image_panel_* below).
-    meme_review: bool = True
-    # The opening image is the thumbnail: pitching across styles is worth the most thought (the panels judge it).
+    # The opening image is the thumbnail: pitching across styles is worth the most thought.
     effort_opening_ideas: Effort = "high"
-    # The judging panels (images/panel.py): independent seats as "role:model:effort" (model = opus, sonnet, haiku or an
-    # id), all run at once. The pitch panels score the ideas; the render panel looks at the top drawings (a blind
-    # reader says what each means, matched against the pitch); the final pick chooses between them.
-    image_panel_meme: list[str] = Field(
-        default_factory=lambda: [
-            "scroller:haiku:low",
-            "scroller:sonnet:low",
-            "gets_it:haiku:low",
-            "comedy_editor:sonnet:medium",
-            "format_fan:sonnet:low",
-            "author:opus:medium",
-        ]
-    )
-    image_panel_opening: list[str] = Field(
-        default_factory=lambda: [
-            "scroller:haiku:low",
-            "scroller:sonnet:low",
-            "gets_it:haiku:low",
-            "art_director:sonnet:medium",
-            "fact_checker:sonnet:medium",
-            "author:opus:medium",
-        ]
-    )
-    image_panel_render: list[str] = Field(
-        default_factory=lambda: ["blind_reader:haiku:low", "blind_reader:sonnet:low", "craft:sonnet:medium", "appeal:sonnet:low"]
-    )
-    image_panel_final: str = "opus:medium"
-    # How many of the best pitches are drawn and judged as pictures (kit and template builds cost no model call).
-    image_render_candidates: int = 2
+    # The judge (images/judge.py) as "model:effort": one call ranks the pitches, one vision call ranks the drawings.
+    image_judge: str = "opus:medium"
+    # A fresh opening image or meme draws this many candidates (code-drawn ones cost no model call), the judge keeps the
+    # best `image_finalists`, each is refined with the judge's fix, and the author picks between them.
+    image_candidates: int = 6
+    # The same for an in-body image (diagram, chart, illustration, screenshot, icon).
+    image_body_candidates: int = 3
+    image_finalists: int = 3
+    # The author's reference images (memes, data art, diagrams) the judge compares against; see images/references.py.
+    image_reference_dir: Path = HOME_DIR / ("references" if FROZEN else "examples")
     # Web searches for the numbers behind a data opener (chart or big number).
     opening_max_searches: int = 4
     effort_detect: Effort = "low"

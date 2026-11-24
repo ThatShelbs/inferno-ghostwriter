@@ -351,8 +351,16 @@ class ProjectImage(SQLModel, table=True):
     # The author's "Edit" instructions since this image's idea was last picked (newest last). While there are any,
     # a redraw or remix builds on the edited picture instead of going back to the original brief or pitch.
     edits: list[str] = Field(default_factory=list, sa_column=Column(JSON))
-    # The author's thumbs on an opening image or closing meme: 1 liked, -1 passed, 0 none (feeds images/taste.py).
+    # No longer used (image ratings were removed); kept so older databases still load.
     rating: int = 0
+    # In-body images: the pitched ideas (see images/body.py); opening images and memes keep theirs in ``spec``.
+    ideas: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    # The best candidates of the last fresh run, the current one included: each has its own file and source, and the
+    # author swaps between them with no model call (``ImageService.pick``).
+    finalists: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    # A style reference the author attached ("make it like this"): a file in the project's image folder, shown to the
+    # designer and the judge on every draw of this image; never published. "" = none.
+    reference: str = ""
 
 
 class ProjectReference(SQLModel, table=True):

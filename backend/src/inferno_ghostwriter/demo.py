@@ -442,17 +442,31 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
     if name == "MemeBuild":
         match = re.search(r"Format `([a-z0-9_]+)`", prompt)
         return meme_build_payload(match.group(1) if match else "classic_caption")
-    if name == "SeatVerdict":
-        return seat_verdict_payload(prompt)
-    if name == "MatchScores":
-        count = len(re.findall(r"^\d+\. Meant to say", prompt, flags=re.MULTILINE)) or 1
-        return {"scores": [{"candidate": i, "score": 8, "note": "Strangers got it.", "reading": ""} for i in range(count)]}
-    if name == "FinalPick":
-        return {"chosen": 0, "fix": "", "why": "The clearest joke at a glance."}
+    if name == "DataArtSpec":
+        return {"engine": "fan_streams", "seed": 7, "density": 0.6, "focus": 0.5, "energy": 0.4, "inputs": 3, "outputs": 4}
+    if name == "PitchRanking":
+        return pitch_ranking_payload(prompt)
+    if name == "SheetVerdict":
+        return sheet_verdict_payload(prompt)
+    if name == "DiagramDesign":
+        return {
+            "diagram": {
+                "template": "pipeline",
+                "alt": "Four steps before a model ships: eval, guardrails, monitor, rollback.",
+                "steps": [
+                    {"label": "Eval", "note": "Score it on held-out data"},
+                    {"label": "Guardrails", "note": "Block the worst outputs"},
+                    {"label": "Monitor", "note": "Watch drift every day"},
+                    {"label": "Rollback", "note": "One click back"},
+                ],
+                "highlight": 2,
+            },
+            "caption": "The pre-launch loop",
+        }
+    if name == "BodyIdeas":
+        return body_ideas_payload(prompt)
     if name == "MemeStagingEdit":
         return meme_staging_edit_payload(prompt)
-    if name == "SceneSpec":
-        return scene_spec_payload(prompt)
     if name == "ChartSpec":
         return {"vega_lite_json": CHART_SPEC, "alt": "Bar chart", "caption": "Accuracy by chart type", "data_is_illustrative": True}
     if name == "PostBrief":
@@ -769,6 +783,9 @@ DEMO_MEME_TEXTS: dict[str, dict[str, str]] = {
         "step4": "Nobody can compare the slices",
     },
     "joke_pie_3d": {"title": "What pie charts are good for", "footnote": "Source: every dashboard review, ever"},
+    "joke_pie": {"title": "Things the average analyst does with a pie chart", "footnote": "Source: vibes"},
+    "joke_bar": {"title": "Where the dashboard hours go", "axis": "Hours per week", "footnote": "Source: my calendar"},
+    "labeled_map": {"title": "THE DATA LAKE", "subtitle": "the confusing continent"},
     "spurious_correlation": {
         "title": "Pie charts in board decks vs. questionable decisions",
         "series_a": "Pie charts per deck",
@@ -847,6 +864,20 @@ DEMO_MEME_TEXTS: dict[str, dict[str, str]] = {
 }
 
 DEMO_MEME_DATA: dict[str, list[dict[str, Any]]] = {
+    "joke_pie": [
+        {"label": "Compare the slices", "value": 3, "series": ""},
+        {"label": "Read the labels", "value": 4, "series": ""},
+        {"label": "Squint", "value": 93, "series": ""},
+    ],
+    "joke_bar": [
+        {"label": "Building it", "value": 4, "series": ""},
+        {"label": "Using it", "value": 1, "series": ""},
+        {"label": "Meetings about it", "value": 31, "series": ""},
+    ],
+    "labeled_map": [
+        {"label": label, "value": 0, "series": ""}
+        for label in ("Raw", "Also raw", "Raw again", "Raw-ish", "Still raw", "Raw too", "Curated (lie)")
+    ],
     "joke_pie_3d": [
         {"label": "Showing two slices", "value": 6, "series": ""},
         {"label": "Diagramming pizza", "value": 9, "series": ""},
@@ -861,7 +892,6 @@ DEMO_MEME_DATA: dict[str, list[dict[str, Any]]] = {
 
 _DEMO_MEME_CYCLE = itertools.cycle(DEMO_MEME_TEXTS)
 _SHOWCASE_MEME_CYCLE = itertools.cycle(showcase.MEME_FORMATS)
-_DEMO_LOOK_CYCLE = itertools.cycle(("kawaii", "viridis_lab", "retro_comic", "corporate_slate", "soft_3d", "magma_noir"))
 
 
 DEMO_COMIC_PANELS: list[dict[str, Any]] = [
@@ -903,13 +933,15 @@ def meme_ideas_payload(prompt: str, is_showcase: bool = False) -> dict[str, Any]
     only = re.search(r"Only use the format `([a-z0-9_]+)`", prompt)
     texts_by_format = {**DEMO_MEME_TEXTS, **showcase.MEME_TEXTS} if is_showcase else DEMO_MEME_TEXTS
     first = only.group(1) if only else next(_SHOWCASE_MEME_CYCLE if is_showcase else _DEMO_MEME_CYCLE)
+    count_match = re.search(r"Pitch (\d+) distinct concepts", prompt)
+    count = int(count_match.group(1)) if count_match else 6
     pool = (
-        ("nope_yep", "terminal", "comic_strip_3", "venn")
+        ("nope_yep", "terminal", "comic_strip_3", "venn", "two_buttons", "distracted")
         if is_showcase
-        else ("nope_yep", "joke_pie_3d", "terminal", "comic_strip_3", "venn")
+        else ("nope_yep", "joke_pie_3d", "terminal", "comic_strip_3", "venn", "two_buttons", "distracted")
     )
     others = [f for f in pool if f != first]
-    formats = [first] * 5 if only else [first, *others[:4]]
+    formats = [first] * count if only else [first, *(others * 2)[: count - 1]]
     concepts = [
         {
             "format": fmt,
@@ -920,7 +952,7 @@ def meme_ideas_payload(prompt: str, is_showcase: bool = False) -> dict[str, Any]
             "texts": [{"slot": slot, "text": text, "speaker": ""} for slot, text in texts_by_format.get(fmt, {}).items()],
             "data": DEMO_MEME_DATA.get(fmt, []),
             "caption": "Friday logic" if is_showcase else "Pie logic",
-            "look": next(_DEMO_LOOK_CYCLE),
+            "anchor": "",
             "cast": [{"role": "calm_one", "kind": "dog", "expression": "", "accessory": ""}] if fmt.startswith("this_is_fine") else [],
             "panels": DEMO_COMIC_PANELS[: 4 if fmt == "comic_grid_4" else 3] if fmt.startswith("comic_") else [],
             "scores": {"relevance": 5, "recognizability": 4, "surprise": 4, "clarity": 5, "voice_fit": 4, "standalone": 4 - i % 2},
@@ -935,46 +967,70 @@ def meme_ideas_payload(prompt: str, is_showcase: bool = False) -> dict[str, Any]
     }
 
 
-DEMO_SCENE_OBJECT = (
-    '<circle cx="300" cy="260" r="200" fill="#ed6925"/>'
-    '<path d="M300,260 L300,60 A200,200 0 0 1 473,360 Z" fill="#f7d13d"/>'
-    '<path d="M300,260 L473,360 A200,200 0 0 1 200,433 Z" fill="#cf4446"/>'
-    '<circle cx="300" cy="260" r="200" fill="none" stroke="#14101f" stroke-width="8"/>'
-)
+def _candidate_count(prompt: str) -> int:
+    block = re.search(r"<candidates>\s*(.*?)\s*</candidates>", prompt, flags=re.DOTALL)
+    return len(re.findall(r"^\d+\. ", block.group(1), flags=re.MULTILINE)) if block else 1
 
 
-def scene_spec_payload(prompt: str) -> dict[str, Any]:
-    """A visual-metaphor opener: the ghost stares, shocked, at a pie chart that will not compare."""
-    return {
-        "layout": "hero_left",
-        "backdrop": "plain",
-        "tone": "",
-        "characters": [{"kind": "ghost", "expression": "shocked", "pose": "point", "slot": "left", "size": "large"}],
-        "props": [],
-        "object_svg": DEMO_SCENE_OBJECT,
-        "labels": [{"text": "Which is bigger?", "slot": "object"}],
-        "alt": "The Inferno Ghostwriter ghost points, shocked, at a pie chart whose slices look the same size.",
-        "caption": "Spot the difference. You can't.",
-    }
-
-
-def seat_verdict_payload(prompt: str) -> dict[str, Any]:
-    """One panel seat: likes the first candidate best; a blind reader says what each picture shows."""
-    match = re.search(r"The (\d+) candidates", prompt)
-    count = int(match.group(1)) if match else 1
-    blind = "blind reader" in prompt.lower()
+def pitch_ranking_payload(prompt: str) -> dict[str, Any]:
+    """The pitch judge: likes the first pitch best, the rest a little less."""
     return {
         "scores": [
             {
                 "candidate": i,
-                "score": max(5, 8 - i),
+                "story_fit": max(5, 9 - i),
+                "clarity": max(5, 8 - i),
+                "surprise": 7,
+                "veto": False,
                 "note": "Clear at a glance; the risk is that it is familiar.",
-                "reading": "A friendly character reacts to a chart joke." if blind else "",
             }
-            for i in range(count)
+            for i in range(max(1, _candidate_count(prompt)))
         ],
         "punch_up": [],
         "punch_for": -1,
+    }
+
+
+def sheet_verdict_payload(prompt: str) -> dict[str, Any]:
+    """The picture judge: the first candidate wins, every one reads as its idea, and none needs a fix."""
+    return {
+        "scores": [
+            {
+                "candidate": i,
+                "reads_as": "A clear, friendly picture of the post's point.",
+                "score": max(5, 8 - i),
+                "fidelity": 0,
+                "fix": "",
+            }
+            for i in range(max(1, _candidate_count(prompt)))
+        ],
+        "why": "The clearest picture at a glance.",
+    }
+
+
+def body_ideas_payload(prompt: str) -> dict[str, Any]:
+    """In-body image ideas: as many as asked, in the first kind the slot allows."""
+    count = re.search(r"Pitch exactly (\d+) distinct ideas", prompt)
+    kind = re.search(r"The kinds you may draw it as: `([a-z]+)`", prompt)
+    return {
+        "concepts": [
+            {
+                "kind": kind.group(1) if kind else "diagram",
+                "hook": f"Idea {i + 1}: the point at a glance.",
+                "concept": (
+                    "A four-step loop with labelled boxes and arrows.",
+                    "Nested rings, the focus in the middle.",
+                    "A before/after split.",
+                    "A 2x2 matrix.",
+                )[i % 4],
+                "reader_takeaway": "At a glance a reader sees the steps and understands the order.",
+                "anchor": "",
+                "figures": "none",
+                # The first diagram idea uses a code template, the rest are drawn freehand.
+                "template": "pipeline" if i == 0 and (kind.group(1) if kind else "diagram") == "diagram" else "",
+            }
+            for i in range(int(count.group(1)) if count else 4)
+        ]
     }
 
 

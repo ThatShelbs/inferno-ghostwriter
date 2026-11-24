@@ -1,4 +1,4 @@
-"""Structured outputs for the two meme calls: the writers' room (ideas) and production (build)."""
+"""Structured outputs for the meme room: the pitches (ideas), a built meme, and an edit to one."""
 
 from __future__ import annotations
 
@@ -64,9 +64,9 @@ class MemeConcept(BaseModel):
     texts: list[MemeText] = Field(description="Final words for every text slot of the format.")
     data: list[MemeDatum] = Field(description="Chart data, only for formats whose menu entry asks for it; empty list otherwise.")
     caption: str = Field(description="A short caption to sit under the image, in the author's style. Never repeats the meme's words.")
-    look: str = Field(
+    anchor: str = Field(
         default="",
-        description="The look id from the looks menu that serves this joke best (it also varies from the author's recent memes).",
+        description="The exact words (5-15, copied verbatim) from the post this joke riffs on, so it serves a real moment.",
     )
     cast: list[CastPick] = Field(
         default_factory=list,
@@ -82,7 +82,7 @@ class MemeIdeas(BaseModel):
     angles: list[str] = Field(
         default_factory=list, description="About 12 one-line raw comedy angles found in the post, written before the concepts."
     )
-    concepts: list[MemeConcept] = Field(description="Five distinct concepts, at least three format families.")
+    concepts: list[MemeConcept] = Field(description="Distinct concepts (as many as asked), at least three format families.")
     chosen: int = Field(description="Index of the strongest concept.")
     why: str = Field(description="One sentence on why the chosen concept wins.")
 

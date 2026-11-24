@@ -2,16 +2,16 @@
 
 1. **Pitch** (``OpeningIdeas``): six concepts across the styles that suit the post (four in one style when the author
    chose it). On Auto at least two are open visual metaphors and one is data art, so imaginative ideas always compete.
-2. **Panel** (``images/panel.py``): independent seats on Haiku, Sonnet and Opus (scroller, cold reader, art
-   director, fact checker, author) score every concept at once. Code adds the votes; vetoes rule a concept out.
+2. **Rank** (``judge.rank_pitches``): one judge call scores every concept (story fit, clarity, surprise) and may
+   veto one; a concept whose ``anchor`` quote is not in the post ranks last.
 3. **Research** (data styles only): the winning claim's numbers are looked up with web search.
-4. **Build**: a kit-staged scene (visual metaphor: kit characters and props plus one custom object Claude draws,
-   ``scene.py``), Claude SVG (data art, receipt; linted and snapped to the scheme), a code template (cheat sheet,
+4. **Build**: Claude SVG (visual metaphor and receipt; linted, snapped to the scheme, library figures injected), a
+   data-art engine (``images/art``), a code template (cheat sheet,
    versus, big number, framework, chart) or the meme room. Every number a data opener prints must pass ``facts.check``.
-   A fresh opener builds its two best concepts at once.
-5. **Render panel**: blind readers see only the pictures and say what they mean (matched against each concept's
-   ``reader_takeaway``), a craft and an appeal seat look closely, and a final pick on Opus chooses between the feed
-   cards and may ask for one fix. Connections that cannot show Claude an image skip this step.
+   A fresh opener builds its best ``image_candidates`` concepts at once.
+5. **Judge the pictures** (``judge.judge_sheet``): one vision call sees every candidate next to the author's
+   reference images, says what each reads as, scores it and names one fix. The best ``image_finalists`` are rebuilt
+   with their fix and offered to the author. Connections that cannot show Claude an image keep the pitch order.
 
 Colors come from a ``Scheme`` (inferno, magma or viridis on white, gray or near-black; a brand palette wins), stored
 on the image and rotated against the author's recent images.
@@ -26,33 +26,35 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images.base import ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.figures import FigureColors, catalog_text
+from inferno_ghostwriter.images.figures import inject as inject_figures
+from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker, MemeResult
 from inferno_ghostwriter.images.memes.generate import clip_post
 from inferno_ghostwriter.images.memes.generate import load_state as load_meme_state
 from inferno_ghostwriter.images.opening import facts, templates
 from inferno_ghostwriter.images.opening.canvas import SAFE_BOTTOM, SAFE_TOP
-from inferno_ghostwriter.images.opening.feedcard import feed_card
-from inferno_ghostwriter.images.opening.scene import compose_scene, scene_menu
 from inferno_ghostwriter.images.opening.specs import (
     OpeningBuild,
     OpeningConcept,
     OpeningIdeas,
-    SceneSpec,
 )
 from inferno_ghostwriter.images.opening.styles import AUTO, BY_ID, FALLBACK, STYLES, OpeningStyle, get_style
-from inferno_ghostwriter.images.palettes import DARK_SURFACES, LIGHT_SURFACES, Scheme, brand_scheme, from_id, house_ramp, scheme
+from inferno_ghostwriter.images.palettes import Scheme, brand_scheme, from_id, house_ramp, scheme
 from inferno_ghostwriter.images.palettes import pick as pick_colors
-from inferno_ghostwriter.images.panel import PanelResult, convene, final_pick, parse_seats
+from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
 from inferno_ghostwriter.images.remix import dimensions_for, edit_note, variation_for
 from inferno_ghostwriter.images.render import svg_to_png
 from inferno_ghostwriter.images.specs import SvgSpec
+from inferno_ghostwriter.images.story import anchored, deal
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import Citation, LLMRefusalError, ResearchResult, UsageSink
 from inferno_ghostwriter.prompts import raw, render
@@ -72,7 +74,8 @@ NOT_AN_OPENING = "This image was made before opening styles existed; click New i
 
 SVG_RULES = {
     "editorial": (
-        "An imaginative editorial illustration that acts out the post's central mechanism as one physical scene. Make the "
+        "An imaginative editorial illustration that acts out the post's central mechanism as one physical scene, in a clean "
+        "flat-vector style with soft shadows and one focal point. Make the "
         "metaphor specific to this post; up to four short labels (one or two words each, from the post) are allowed only "
         "where they make the metaphor click, such as the buckets of a plinko board. No headline or title text."
     ),
@@ -141,19 +144,12 @@ class OpeningContext:
     meme_context: MemeContext | None = None
     # Color schemes ("ramp:surface") the author's latest images used, newest first.
     recent_schemes: tuple[str, ...] = ()
-    # The author's taste from their thumbs (images/taste.py), as a prompt note; "" when unknown.
-    taste: str = ""
+    # Seeds the angle cards; a new one each run keeps pitches fresh.
+    seed: int | None = None
 
 
-@dataclass
-class OpeningResult:
-    png: bytes
-    width: int
-    height: int
-    provider: str
-    spec: str
-    alt: str
-    caption: str
+# The opening room returns the shared result type.
+OpeningResult = Drawn
 
 
 @dataclass
@@ -259,6 +255,7 @@ class OpeningRoom:
         self.settings = settings
         self.memes = memes
         self.system = [SystemBlock(raw("opening_system"), cache=True)]
+        self.references = ReferenceLibrary(settings.image_reference_dir)
 
     # -- public ------------------------------------------------------------------------
 
@@ -329,12 +326,14 @@ class OpeningRoom:
         state["scheme"] = sch.id
         first_style = state["concepts"][order[0]]["style"] if order else FALLBACK
         built: _Built | None = None
-        fresh = not (redraw or rethink or concept_index is not None or meme_format is not None or style)
-        if fresh and len(order) > 1 and self.settings.image_render_candidates > 1:
-            # A fresh opener builds its best concepts at once and lets the render panel choose between the pictures.
+        finalists: list[Drawn] = []
+        # A fresh pitch (a new image, new pitches, another style) builds its best concepts at once and lets the judge
+        # choose between the pictures; the best few become finalists.
+        fresh = bool(state.pop("_fresh", False)) and concept_index is None and meme_format is None
+        if fresh and len(order) > 1 and self.settings.image_candidates > 1:
             chosen_build = await self._build_and_choose(state, order, ctx, art, sch, tried, usage)
             if chosen_build is not None:
-                i, built = chosen_build
+                i, built, finalists = chosen_build
                 state["chosen"] = i
                 # The panel preferred this concept; nothing failed, so it is not a stand-in.
                 first_style = str(state["concepts"][i].get("style") or first_style)
@@ -378,7 +377,9 @@ class OpeningRoom:
         if built.state.get("style", FALLBACK) != first_style:
             state["fallback_from"] = first_style
         state["tried"] = sorted(tried)
-        return self._finish(state, built)
+        result = self._finish(state, built)
+        result.finalists = finalists
+        return result
 
     async def _build_and_choose(
         self,
@@ -389,10 +390,11 @@ class OpeningRoom:
         sch: Scheme,
         tried: set[int],
         usage: UsageSink | None,
-    ) -> tuple[int, _Built] | None:
-        """Build the best concepts at once, then let the render panel and the final pick choose; None if none built."""
-        count = max(2, self.settings.image_render_candidates)
-        # The best concepts, at most one of them a meme (each meme is a whole writers' room of its own).
+    ) -> tuple[int, _Built, list[Drawn]] | None:
+        """Build the best concepts at once, let the judge look at the pictures, refine the best and keep them as
+        finalists; None if none could be built."""
+        count = max(2, self.settings.image_candidates)
+        # The best concepts, at most one of them a meme (each meme is a whole room of its own).
         picks: list[int] = []
         for i in [i for i in order if not ruled_out(state["concepts"][i])] or order:
             is_meme = state["concepts"][i].get("style") == "meme"
@@ -402,75 +404,97 @@ class OpeningRoom:
             if len(picks) >= count:
                 break
         concepts = load_concepts(state)
-        scratch = [dict(state) for _ in picks]
+        scratch = [json.loads(json.dumps(state)) for _ in picks]
         results = await asyncio.gather(
             *(self._build(concepts[i], scratch[k], ctx, art, sch, redraw=False, usage=usage) for k, i in enumerate(picks))
         )
         tried.update(picks)
-        state["tried_parallel"] = list(picks)
-        options = [(i, b, scratch[k]) for k, (i, b) in enumerate(zip(picks, results, strict=True)) if b is not None]
+        options: list[list[Any]] = [[i, b, scratch[k]] for k, (i, b) in enumerate(zip(picks, results, strict=True)) if b is not None]
         if not options:
             return None
-        chosen = 0
-        review: dict[str, Any] = {"verdict": "passed", "candidates": [o[0] for o in options]}
-        seats = parse_seats(self.settings.image_panel_render)
-        if seats:
-            pngs = [thumbnail_png(o[1].png) for o in options]
-            cards = [feed_card(o[1].png, ctx.title) for o in options]
-            labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
-            intents = [concepts[o[0]].reader_takeaway or concepts[o[0]].concept for o in options]
-            panel = await convene(
-                self.llm, seats, context=self._panel_context(ctx), candidates=labels, images=pngs, intents=intents, usage=usage
-            )
-            if panel.answered:
-                pick = await final_pick(
-                    self.llm,
-                    context=self._panel_context(ctx),
-                    candidates=labels,
-                    images=cards,
-                    panel=panel,
-                    spec=self.settings.image_panel_final,
-                    usage=usage,
+        keep = max(1, self.settings.image_finalists)
+        labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
+        refs, note = self._references([concepts[o[0]].style for o in options], [o[2] for o in options])
+        if art.reference is not None:
+            refs, note = [*refs, art.reference], (note + "; " if note else "") + "the last one is the author's style reference"
+        sheet = await judge_sheet(
+            self.llm,
+            self.settings,
+            context=self._panel_context(ctx),
+            candidates=[
+                f"{label}\n   Meant to say: {concepts[o[0]].reader_takeaway or concepts[o[0]].concept}"
+                for label, o in zip(labels, options, strict=True)
+            ],
+            pngs=[thumbnail_png(o[1].png) for o in options],
+            references=refs,
+            reference_note=note,
+            usage=usage,
+        )
+        review: dict[str, Any]
+        if sheet is not None:
+            ranked = sheet.order()[:keep]
+            review = {"why": sheet.why, "candidates": [o[0] for o in options]}
+            for k, o in enumerate(options):
+                state["concepts"][o[0]]["reads_as"] = sheet.reads_as[k]
+
+            async def refine(k: int) -> None:
+                i, current, scratch_state = options[k]
+                fix_text = sheet.fixes[k]
+                if not fix_text or concepts[i].style == "meme":  # a meme would need its own room to change
+                    return
+                fix = (
+                    "\nThe judge looked at the finished picture and asked for one change; keep everything else exactly as it "
+                    f"is:\n<instruction>\n{fix_text}\n</instruction>\n" + self._current_note(current.state)
                 )
-                order_ = panel.ranking()
-                vetoed_all = len(panel.vetoed) == len(options)
-                chosen = pick.chosen if pick is not None and (pick.chosen not in panel.vetoed or vetoed_all) else order_[0]
-                review = {
-                    "verdict": "passed",
-                    "panel": panel.summary(),
-                    "why": pick.why if pick else "",
-                    "fix": pick.fix if pick else "",
-                    "candidates": [o[0] for o in options],
-                }
-                fixable = concepts[options[chosen][0]].style != "meme"  # a meme would need its own room to change
-                if pick is not None and pick.fix.strip() and pick.chosen == chosen and fixable:
-                    i, current, scratch_state = options[chosen]
-                    fix = (
-                        "\nThe art director looked at the finished picture and asked for one change; keep everything else "
-                        f"exactly as it is:\n<instruction>\n{pick.fix.strip()}\n</instruction>\n" + self._current_note(current.state)
-                    )
-                    again = await self._build(
-                        concepts[i], scratch_state, ctx, art, sch, redraw=False, usage=usage, fix=fix, keep_research=True
-                    )
-                    if again is not None:
-                        options[chosen] = (i, again, scratch_state)
-                        review["verdict"] = "redrawn"
-            else:
-                review = {"skipped": True, "note": "This connection cannot show Claude the image, so it was not reviewed."}
-        i, built, scratch_state = options[chosen]
-        state.pop("tried_parallel", None)
-        review["winner"] = chosen
+                again = await self._build(concepts[i], scratch_state, ctx, art, sch, redraw=False, usage=usage, fix=fix, keep_research=True)
+                if again is not None:
+                    options[k][1] = again
+
+            await asyncio.gather(*(refine(k) for k in ranked))
+        else:
+            ranked = list(range(min(keep, len(options))))
+            review = {"skipped": True, "note": "Ranked from the pitches (this connection cannot show Claude pictures)."}
+        state["review"] = review
+        finalists: list[Drawn] = []
+        for k in ranked:
+            i, built, scratch_state = options[k]
+            snapshot = json.loads(json.dumps(state))
+            for key in ("research", "post_numbers"):
+                if key in scratch_state:
+                    snapshot[key] = scratch_state[key]
+            snapshot["chosen"] = i
+            drawn = self._finish(snapshot, built)
+            drawn.label = labels[k]
+            drawn.score = round(sheet.scores[k], 2) if sheet is not None else None
+            drawn.reads_as = sheet.reads_as[k] if sheet is not None else ""
+            finalists.append(drawn)
+        i, built, scratch_state = options[ranked[0]]
         for key in ("research", "post_numbers"):
             if key in scratch_state:
                 state[key] = scratch_state[key]
-        state["review"] = review
-        return i, built
+        return i, built, finalists if len(finalists) > 1 else []
+
+    def _references(self, styles: list[str], states: list[dict[str, Any]]) -> tuple[list[bytes], str]:
+        """The author's reference images for the styles in the running (the original meme for a meme)."""
+        paths = []
+        for style, st in zip(styles, states, strict=True):
+            if style == "meme":
+                inner = load_meme_state(str(st.get("meme") or "")) or {}
+                found = self.references.for_meme(str(inner.get("format") or ""))
+                if found:
+                    paths.append(found)
+            elif style == "data_art":
+                paths += self.references.for_category("data_art", 2)
+            else:
+                paths += self.references.for_category("diagram", 1)
+        unique = list(dict.fromkeys(paths))[:4]
+        return (load_png(unique, 512), "the author's examples of the quality and style to aim for") if unique else ([], "")
 
     @staticmethod
     def _current_note(built_state: dict[str, Any]) -> str:
         """The picture as built, for a change that must keep the rest of it."""
-        if built_state.get("scene"):
-            return f"\nThe current scene to change:\n<current>\n{json.dumps(built_state['scene'], indent=1)}\n</current>\n"
+        if built_state.get("art"):
+            return f"\nThe current settings to change:\n<current>\n{json.dumps(built_state['art'], indent=1)}\n</current>\n"
         if built_state.get("svg"):
             return f"\nThe current SVG to change:\n<current>\n{built_state['svg']}\n</current>\n"
         if built_state.get("build"):
@@ -501,10 +525,10 @@ class OpeningRoom:
             meme = await self.memes.edit(str(state.get("meme") or ""), instruction, art, usage=usage)
             return self._from_meme(state, meme)
         concept = self._chosen_concept(state)
-        if style.builder == "svg":
+        if state.get("art") and style.id == "data_art":
+            note += f"\nThe current settings to edit:\n<current>\n{json.dumps(state['art'], indent=1)}\n</current>\n"
+        elif style.builder == "svg":
             note += f"\nThe current SVG to edit:\n<current>\n{state.get('svg', '')}\n</current>\n"
-        elif style.builder == "scene" and state.get("scene"):
-            note += f"\nThe current scene to edit:\n<current>\n{json.dumps(state['scene'], indent=1)}\n</current>\n"
         else:
             note += f"\nThe current build to edit:\n<current>\n{json.dumps(state.get('build') or {}, indent=1)}\n</current>\n"
         sch = scheme_of(state, art.palette)
@@ -519,10 +543,10 @@ class OpeningRoom:
         style = BY_ID.get(concept.style) or BY_ID[FALLBACK]
         if not art.edits or style.builder == "meme":  # an opening meme's own room reads the edits
             return ""
+        if state.get("art") and style.id == "data_art":
+            return edit_note(art.edits, json.dumps(state["art"], indent=1), what="settings")
         if style.builder == "svg":
             return edit_note(art.edits, str(state.get("svg") or ""), what="svg") if state.get("svg") else ""
-        if style.builder == "scene" and state.get("scene"):
-            return edit_note(art.edits, json.dumps(state["scene"], indent=1), what="scene")
         build = state.get("build")
         return edit_note(art.edits, json.dumps(build, indent=1), what="build") if build else ""
 
@@ -601,7 +625,11 @@ class OpeningRoom:
                 if recent and not fixed
                 else ""
             )
-            + (f"\n{ctx.taste}\n" if ctx.taste else ""),
+            + (
+                ""
+                if fixed
+                else "\n" + deal(ctx.markdown, seed=ctx.seed if ctx.seed is not None else random.randrange(1 << 30), humor=ctx.humor) + "\n"
+            ),
             exclude=("\nThese ideas were already used; pitch different ones:\n" + "\n".join(f"- {e}" for e in exclude) + "\n")
             if exclude
             else "",
@@ -637,8 +665,11 @@ class OpeningRoom:
         if not concepts:
             raise ImageProviderError("Claude did not pitch any opening ideas. Click New idea to try again.")
         entries = [c.model_dump() for c in concepts]
+        for entry, concept in zip(entries, concepts, strict=True):
+            entry["anchored"] = anchored(concept.anchor, ctx.markdown)
         summary = await self._judge(ctx, concepts, entries, usage)
         return {
+            "_fresh": True,
             "version": STATE_VERSION,
             "room": "opening",
             "brief": ctx.brief,
@@ -683,28 +714,23 @@ class OpeningRoom:
     async def _judge(
         self, ctx: OpeningContext, concepts: list[OpeningConcept], entries: list[dict[str, Any]], usage: UsageSink | None
     ) -> str:
-        """The independent pitch panel (images/panel.py); without enough seats the pitch order stands."""
-        seats = parse_seats(self.settings.image_panel_opening)
-        result: PanelResult | None = None
-        if seats:
-            result = await convene(
-                self.llm, seats, context=self._panel_context(ctx), candidates=[_concept_text(c) for c in concepts], usage=usage
-            )
-        if result is None or not result.ok:
-            # Without a verdict the concepts keep the order they were pitched in (the pitcher put its best first).
-            log.info("Opening panel: too few seats answered; using pitch order")
-            for i, entry in enumerate(entries):
-                entry["panel"] = {"total": max(1, 6 - i), "vetoed": False, "note": "Not judged (the panel did not answer)."}
-            return ""
+        """One judge call ranks the concepts; without an answer the pitch order stands. Unanchored concepts rank last."""
+        result = await rank_pitches(
+            self.llm, self.settings, context=self._panel_context(ctx), candidates=[_concept_text(c) for c in concepts], usage=usage
+        )
         for i, entry in enumerate(entries):
-            entry["panel"] = {
-                "total": round(result.totals[i] + (100 if i in result.vetoed else 0), 2),
-                "vetoed": i in result.vetoed,
-                "note": " | ".join(result.notes[i][:3]),
-                "seats": {k: v[i] for k, v in result.seats.items()},
-            }
+            if result is None:
+                entry["panel"] = {"total": max(1, 6 - i), "vetoed": False, "note": "Not judged (the judge did not answer)."}
+            else:
+                entry["panel"] = result.entry(i)
+            if not entry.get("anchored", True):
+                entry["panel"]["vetoed"] = True
+                entry["panel"]["note"] = ("Its quote is not in the post. " + str(entry["panel"].get("note") or "")).strip()
+        if result is None:
+            log.info("Opening judge did not answer; using pitch order")
+            return ""
         best = result.best()
-        return result.notes[best][0].split(": ", 1)[-1] if best is not None and result.notes[best] else ""
+        return result.notes[best] if best is not None else ""
 
     # -- building ------------------------------------------------------------------------
 
@@ -742,8 +768,8 @@ class OpeningRoom:
             if style.builder == "meme":
                 previous = str(state.get("meme") or "") if redraw and state.get("style") == "meme" and not meme_format else ""
                 return await self._build_meme(concept, previous, ctx, art, usage, meme_format)
-            if style.builder == "scene":
-                return await self._build_scene(style, concept, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
+            if style.id == "data_art":
+                return await self._build_art(style, concept, state, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             if style.builder == "svg":
                 return await self._build_svg(style, concept, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             return await self._build_template(
@@ -755,10 +781,11 @@ class OpeningRoom:
             log.info("Opening %s could not be built: %s", style.id, exc)
             return None
 
-    async def _build_scene(
+    async def _build_art(
         self,
         style: OpeningStyle,
         concept: OpeningConcept,
+        state: dict[str, Any],
         ctx: OpeningContext,
         art: ArtDirection,
         sch: Scheme,
@@ -767,58 +794,48 @@ class OpeningRoom:
         fix: str,
         usage: UsageSink | None,
     ) -> _Built:
-        """A visual metaphor staged from the kit: Claude casts and arranges it (one SceneSpec call), code draws it."""
-        allowed = dimensions_for("hero", style.id)
+        """Data art from a code engine: Claude picks the engine and its dials (one small call), code draws it."""
+        from inferno_ghostwriter.images.art import ENGINES, DataArtSpec, render_art
+
+        previous = state.get("art") if redraw else None
+        variation = ""
+        if previous:
+            variation = (
+                "This is a redraw. The previous settings were:\n"
+                + json.dumps(previous)
+                + "\nKeep what works, change the seed, and try one bolder dial (or another engine if it fits better).\n"
+                + (variation_for(art, dimensions_for("hero", style.id)) or "")
+            )
         prompt = render(
-            "opening_build_scene",
+            "opening_build_art",
             title=ctx.title,
             concept=_concept_text(concept),
-            colors=sch.describe(),
-            visual_style=art.visual_style,
-            brand=art.brand,
-            variation=(
-                (variation_for(art, allowed) or "This is a redraw: keep the idea but give it a fresh layout, cast and staging.")
-                if redraw
-                else ""
-            ),
+            variation=variation,
             fix=fix,
-            kit=scene_menu(),
-            image_guidance=art.image_guidance,
+            engines="\n".join(f"- `{k}`: {v}" for k, v in ENGINES.items()),
             post=clip_post(ctx.markdown, 5000, tail=0),
         )
-
-        async def ask(note: str) -> SceneSpec:
-            return await self.llm.structured(
-                task="opening scene",
-                system=self.system,
-                prompt=prompt + note,
-                schema=SceneSpec,
-                effort=self.settings.effort_images,
-                max_tokens=16000,
-                usage=usage,
-            )
-
-        used = {"scheme": sch.id}
-
-        def draw(made: SceneSpec, last: bool) -> tuple[bytes, int, int]:
-            colors = sch
-            if made.tone in ("dark", "light") and colors.ramp_id != "brand" and (made.tone == "dark") != colors.dark:
-                colors = scheme(colors.ramp_id, (DARK_SURFACES if made.tone == "dark" else LIGHT_SURFACES)[0])
-            png, width, height, problems = compose_scene(made, colors)
-            if problems and not last:
-                raise ImageProviderError("\n".join(problems))
-            used["scheme"] = colors.id
-            return png, width, height
-
-        made, (png, width, height) = await draw_with_retry(ask, draw)
+        spec = await self.llm.structured(
+            task="opening data art",
+            system=self.system,
+            prompt=prompt,
+            schema=DataArtSpec,
+            effort=self.settings.effort_images,
+            max_tokens=4000,
+            usage=usage,
+        )
+        if previous and spec.seed == previous.get("seed"):
+            spec = spec.model_copy(update={"seed": (spec.seed * 7919 + 13) % (2**31 - 1)})
+        png, width, height = svg_to_png(render_art(spec, sch), width=1600)
+        alt = f"Abstract generative data art ({spec.engine.replace('_', ' ')}) in the post's colors."
         return _Built(
             png,
             width,
             height,
-            "claude-scene",
-            made.alt,
-            made.caption,
-            {"style": style.id, "template": "", "svg": None, "build": None, "scene": made.model_dump(), "scheme": used["scheme"]},
+            "claude-art",
+            alt,
+            "",
+            {"style": style.id, "template": "", "svg": None, "build": None, "art": spec.model_dump()},
         )
 
     async def _build_svg(
@@ -840,6 +857,8 @@ class OpeningRoom:
                 "buckets), do not draw them: translate each into abstract structure (coins become particles, a flip becomes a "
                 "stream splitting in two, buckets become lanes) and keep the subject only as a subtle hint.\n"
             )
+        if style.id == "editorial":
+            fix += "\n" + catalog_text() + "\n"
         prompt = render(
             "opening_build_svg",
             style_label=style.label,
@@ -877,7 +896,8 @@ class OpeningRoom:
             )
             if report.problems and not last:
                 raise ImageProviderError("\n".join(report.problems))
-            made.svg = report.svg
+            # Library figures are added after the color snap, so skin and hair keep their natural tones.
+            made.svg = inject_figures(report.svg, FigureColors.from_scheme(sch))
             png, width, height = svg_to_png(made.svg, width=1600)
             if not _png_aspect_ok(width, height):
                 raise ImageProviderError("Use viewBox `0 0 1600 900`: the opening image must be 16:9.")
@@ -1009,7 +1029,7 @@ class OpeningRoom:
             title=ctx.title, markdown=ctx.markdown, voice_profile=ctx.voice_profile, brief="", humor=ctx.humor
         )
         meme_ctx = replace(base, brief=f"{concept.concept} ({concept.hook})", position="opening", opening="", joke="")
-        meme = await self.memes.make(previous, meme_ctx, art, redraw=bool(previous), meme_format=meme_format, review=False, usage=usage)
+        meme = await self.memes.make(previous, meme_ctx, art, redraw=bool(previous), meme_format=meme_format, finalists=False, usage=usage)
         return _Built(
             meme.png,
             meme.width,
@@ -1024,6 +1044,8 @@ class OpeningRoom:
     # -- finish ------------------------------------------------------------------------------
 
     def _finish(self, state: dict[str, Any], built: _Built) -> OpeningResult:
+        if "art" not in built.state:
+            state.pop("art", None)
         state.update(built.state)
         return OpeningResult(built.png, built.width, built.height, built.provider, json.dumps(state), built.alt, built.caption)
 
