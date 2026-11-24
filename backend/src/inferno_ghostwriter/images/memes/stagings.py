@@ -14,11 +14,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from inferno_ghostwriter.images.kit import Character, draw
+from inferno_ghostwriter.images.kit import Character
 from inferno_ghostwriter.images.kit import props as kp
 from inferno_ghostwriter.images.kit.face import EXPRESSIONS
 from inferno_ghostwriter.images.kit.props import Stage
 from inferno_ghostwriter.images.kit.rig import ACCESSORIES, KINDS, POSES, PROPS
+from inferno_ghostwriter.images.memes.cast import draw
 from inferno_ghostwriter.images.memes.formats import Box, MemeFormat
 
 # One cast pick per role: kind plus optional expression / accessory overrides (validated).
@@ -35,8 +36,10 @@ class CastRole:
 
 def _pick(cast: Cast, role: str, default: str) -> dict[str, str]:
     raw = cast.get(role) or {}
-    kind = raw.get("kind", "") if raw.get("kind", "") in KINDS else default
-    out = {"kind": kind}
+    # People play every role, as in the original meme; the ghost only when it is cast on purpose.
+    picked = raw.get("kind", "")
+    kind = "ghost" if picked == "ghost" else "person"
+    out: dict[str, str] = {"kind": kind}
     if raw.get("expression") in EXPRESSIONS:
         out["expression"] = raw["expression"]
     if raw.get("accessory") in ACCESSORIES:
@@ -61,7 +64,7 @@ def ch(
     False; an accessory the author or Claude picked replaces the beat's default."""
     pick = _pick(cast, role, default)
     expr = expression if fixed_expression else pick.get("expression", expression)
-    return Character(pick["kind"], expr, pose, facing, pick.get("accessory", accessory), prop, variant)
+    return Character(pick["kind"], expr, pose, facing, pick.get("accessory", accessory), prop, variant, label=role)
 
 
 def clip(box: Box, body: str, cid: str) -> str:
