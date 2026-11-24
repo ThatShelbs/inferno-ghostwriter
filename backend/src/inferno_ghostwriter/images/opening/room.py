@@ -492,6 +492,8 @@ class OpeningRoom:
     @staticmethod
     def _current_note(built_state: dict[str, Any]) -> str:
         """The picture as built, for a change that must keep the rest of it."""
+        if built_state.get("art"):
+            return f"\nThe current settings to change:\n<current>\n{json.dumps(built_state['art'], indent=1)}\n</current>\n"
         if built_state.get("scene"):
             return f"\nThe current scene to change:\n<current>\n{json.dumps(built_state['scene'], indent=1)}\n</current>\n"
         if built_state.get("svg"):
@@ -524,7 +526,9 @@ class OpeningRoom:
             meme = await self.memes.edit(str(state.get("meme") or ""), instruction, art, usage=usage)
             return self._from_meme(state, meme)
         concept = self._chosen_concept(state)
-        if style.builder == "svg":
+        if state.get("art") and style.id == "data_art":
+            note += f"\nThe current settings to edit:\n<current>\n{json.dumps(state['art'], indent=1)}\n</current>\n"
+        elif style.builder == "svg":
             note += f"\nThe current SVG to edit:\n<current>\n{state.get('svg', '')}\n</current>\n"
         elif style.builder == "scene" and state.get("scene"):
             note += f"\nThe current scene to edit:\n<current>\n{json.dumps(state['scene'], indent=1)}\n</current>\n"
@@ -542,6 +546,8 @@ class OpeningRoom:
         style = BY_ID.get(concept.style) or BY_ID[FALLBACK]
         if not art.edits or style.builder == "meme":  # an opening meme's own room reads the edits
             return ""
+        if state.get("art") and style.id == "data_art":
+            return edit_note(art.edits, json.dumps(state["art"], indent=1), what="settings")
         if style.builder == "svg":
             return edit_note(art.edits, str(state.get("svg") or ""), what="svg") if state.get("svg") else ""
         if style.builder == "scene" and state.get("scene"):
@@ -769,6 +775,8 @@ class OpeningRoom:
                 return await self._build_meme(concept, previous, ctx, art, usage, meme_format)
             if style.builder == "scene":
                 return await self._build_scene(style, concept, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
+            if style.id == "data_art":
+                return await self._build_art(style, concept, state, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             if style.builder == "svg":
                 return await self._build_svg(style, concept, ctx, art, sch, redraw=redraw, fix=fix, usage=usage)
             return await self._build_template(
@@ -844,6 +852,63 @@ class OpeningRoom:
             made.alt,
             made.caption,
             {"style": style.id, "template": "", "svg": None, "build": None, "scene": made.model_dump(), "scheme": used["scheme"]},
+        )
+
+    async def _build_art(
+        self,
+        style: OpeningStyle,
+        concept: OpeningConcept,
+        state: dict[str, Any],
+        ctx: OpeningContext,
+        art: ArtDirection,
+        sch: Scheme,
+        *,
+        redraw: bool,
+        fix: str,
+        usage: UsageSink | None,
+    ) -> _Built:
+        """Data art from a code engine: Claude picks the engine and its dials (one small call), code draws it."""
+        from inferno_ghostwriter.images.art import ENGINES, DataArtSpec, render_art
+
+        previous = state.get("art") if redraw else None
+        variation = ""
+        if previous:
+            variation = (
+                "This is a redraw. The previous settings were:\n"
+                + json.dumps(previous)
+                + "\nKeep what works, change the seed, and try one bolder dial (or another engine if it fits better).\n"
+                + (variation_for(art, dimensions_for("hero", style.id)) or "")
+            )
+        prompt = render(
+            "opening_build_art",
+            title=ctx.title,
+            concept=_concept_text(concept),
+            variation=variation,
+            fix=fix,
+            engines="\n".join(f"- `{k}`: {v}" for k, v in ENGINES.items()),
+            post=clip_post(ctx.markdown, 5000, tail=0),
+        )
+        spec = await self.llm.structured(
+            task="opening data art",
+            system=self.system,
+            prompt=prompt,
+            schema=DataArtSpec,
+            effort=self.settings.effort_images,
+            max_tokens=4000,
+            usage=usage,
+        )
+        if previous and spec.seed == previous.get("seed"):
+            spec = spec.model_copy(update={"seed": (spec.seed * 7919 + 13) % (2**31 - 1)})
+        png, width, height = svg_to_png(render_art(spec, sch), width=1600)
+        alt = f"Abstract generative data art ({spec.engine.replace('_', ' ')}) in the post's colors."
+        return _Built(
+            png,
+            width,
+            height,
+            "claude-art",
+            alt,
+            "",
+            {"style": style.id, "template": "", "svg": None, "build": None, "art": spec.model_dump()},
         )
 
     async def _build_svg(
@@ -1049,6 +1114,8 @@ class OpeningRoom:
     # -- finish ------------------------------------------------------------------------------
 
     def _finish(self, state: dict[str, Any], built: _Built) -> OpeningResult:
+        if "art" not in built.state:
+            state.pop("art", None)
         state.update(built.state)
         return OpeningResult(built.png, built.width, built.height, built.provider, json.dumps(state), built.alt, built.caption)
 

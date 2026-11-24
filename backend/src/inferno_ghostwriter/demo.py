@@ -442,6 +442,8 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
     if name == "MemeBuild":
         match = re.search(r"Format `([a-z0-9_]+)`", prompt)
         return meme_build_payload(match.group(1) if match else "classic_caption")
+    if name == "DataArtSpec":
+        return {"engine": "fan_streams", "seed": 7, "density": 0.6, "focus": 0.5, "energy": 0.4, "inputs": 3, "outputs": 4}
     if name == "PitchRanking":
         return pitch_ranking_payload(prompt)
     if name == "SheetVerdict":
