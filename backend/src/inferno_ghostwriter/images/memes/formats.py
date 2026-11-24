@@ -406,6 +406,72 @@ FORMATS: tuple[MemeFormat, ...] = (
         ),
     ),
     MemeFormat(
+        id="joke_pie",
+        name="Joke pie chart",
+        family="chart",
+        when_to_use="A deadpan 'what people actually do' breakdown where one slice swallows the chart (the zombie-apocalypse pie).",
+        recognizable=(
+            "A plain flat pie made in an online chart maker: a big title on top, the pie on the left, a legend of colored squares on "
+            "the right; one slice takes almost all of it."
+        ),
+        size=(1200, 900),
+        background="#ffffff",
+        data="3-6 slices: label = slice name, value = share. Make the punchline slice huge (80-95%) and list it last.",
+        slots=(
+            TextSlot("title", (40, 24, 1120, 140), 80, "title", "The deadpan title: 'Things the average analyst does on a Monday'."),
+            TextSlot(
+                "footnote", (40, 836, 1120, 50), 70, "ui", "Optional fake source line, e.g. 'Source: vibes'.", align="left", optional=True
+            ),
+        ),
+    ),
+    MemeFormat(
+        id="joke_bar",
+        name="Deadpan bar chart",
+        family="chart",
+        when_to_use="Ranking a few things where the last or tallest bar is absurd (time spent: modeling 5, meetings about the model 95).",
+        recognizable="A serious, clean bar chart with a title, labeled bars and one bar that is ridiculously taller than the rest.",
+        size=(1200, 900),
+        background="#ffffff",
+        data="2-6 bars: label = category, value = number. One bar is the punchline (much taller), usually last.",
+        slots=(
+            TextSlot("title", (40, 24, 1120, 120), 80, "title", "The deadpan title."),
+            TextSlot(
+                "axis",
+                (40, 150, 600, 44),
+                40,
+                "ui",
+                "Optional y-axis label with units, e.g. 'Hours per week'.",
+                align="left",
+                optional=True,
+            ),
+            TextSlot(
+                "footnote",
+                (40, 836, 1120, 50),
+                70,
+                "ui",
+                "Optional fake source line, e.g. 'Source: my calendar'.",
+                align="left",
+                optional=True,
+            ),
+        ),
+    ),
+    MemeFormat(
+        id="labeled_map",
+        name="Labeled map joke",
+        family="chart",
+        when_to_use="One place or system where every region gets the same or an absurd label ('north', 'also north', 'still north').",
+        recognizable="A plain outline map of an unnamed landmass with small all-caps labels scattered across it and a title in the corner.",
+        size=(1200, 900),
+        background="#ffffff",
+        data="5-8 labels: label = the text placed on the map (short, all caps reads best); value is ignored.",
+        slots=(
+            TextSlot("title", (40, 770, 640, 70), 40, "title", "The map's name, e.g. 'THE DATA LAKE'.", align="left"),
+            TextSlot(
+                "subtitle", (40, 838, 640, 44), 50, "ui", "A deadpan subtitle, e.g. 'the confusing continent'.", align="left", optional=True
+            ),
+        ),
+    ),
+    MemeFormat(
         id="spurious_correlation",
         name="Spurious correlation chart",
         family="chart",

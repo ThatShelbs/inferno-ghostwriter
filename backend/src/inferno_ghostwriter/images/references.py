@@ -35,6 +35,7 @@ MEME_REFERENCES = {
     "backs_into_hedge": "simpson bush",
     "joke_pie": "zombie apocalypse",
     "joke_pie_3d": "1_jt-r6",
+    "labeled_map": "north still north",
 }
 
 

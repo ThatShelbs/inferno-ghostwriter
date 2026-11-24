@@ -288,6 +288,76 @@ def _joke_pie(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], col
     return scene
 
 
+def _by_size(values: list[float], colors: list[str]) -> list[str]:
+    """Colors per entry so the biggest one (the punchline) gets the most vivid color, the next the second, and so on."""
+    order = sorted(range(len(values)), key=lambda i: values[i], reverse=True)
+    out = [""] * len(values)
+    for rank, i in enumerate(order):
+        out[i] = colors[rank % len(colors)]
+    return out
+
+
+def _flat_pie(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """The online-chart-maker pie: title on top, flat pie on the left, a legend of squares on the right."""
+    slices = charts.pie_slices(data)
+    colors = _by_size([v for _, v in slices], colors)
+    scene = Scene(under=[charts.flat_pie_svg(slices, colors, 400, 500, 300)])
+    top = 500 - len(slices) * 74 // 2
+    for i, (label, _) in enumerate(slices):
+        y = top + i * 74
+        scene.under.append(
+            f'<rect x="760" y="{y + 18}" width="34" height="34" fill="{colors[i % len(colors)]}" stroke="#555555" stroke-width="2"/>'
+        )
+        scene.texts.append(Placed((810, y + 4, 360, 64), label, "ui", align="left", fill="#333333"))
+    return scene
+
+
+def _joke_bar(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """A serious bar chart: light gridlines, labeled bars, values on top."""
+    bars = charts.bar_values(data)
+    colors = _by_size([v for _, v in bars], colors)
+    left, right, base, top = 120, 1140, 740, 220
+    peak = max(v for _, v in bars) or 1
+    slot = (right - left) / len(bars)
+    width = slot * 0.62
+    grid = "".join(
+        f'<line x1="{left}" y1="{base - (base - top) * k / 4:.0f}" x2="{right}" y2="{base - (base - top) * k / 4:.0f}" '
+        f'stroke="#e4e4e4" stroke-width="2"/>'
+        for k in range(1, 5)
+    )
+    scene = Scene(under=[grid + f'<line x1="{left}" y1="{base}" x2="{right}" y2="{base}" stroke="#555555" stroke-width="3"/>'])
+    for i, (label, value) in enumerate(bars):
+        h = (base - top) * value / peak
+        x = left + i * slot + (slot - width) / 2
+        scene.under.append(
+            f'<rect x="{x:.0f}" y="{base - h:.0f}" width="{width:.0f}" height="{h:.0f}" rx="6" fill="{colors[i % len(colors)]}"/>'
+        )
+        scene.texts.append(Placed((round(x - 20), round(base - h - 48), round(width + 40), 42), f"{value:g}", "ui_bold", fill="#333333"))
+        scene.texts.append(Placed((round(left + i * slot), base + 12, round(slot), 76), label, "ui", fill="#333333"))
+    return scene
+
+
+def _labeled_map(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
+    """An unnamed outline landmass with small labels scattered across it, like a hand-annotated map joke."""
+    import math
+    import zlib
+
+    labels = [d.label.strip() for d in data if d.label.strip()][:8]
+    if len(labels) < 3:
+        raise ImageProviderError("The map needs 3-8 labels in `data`.")
+    seed = zlib.crc32("|".join(labels).encode())
+    path = charts.blob_path(seed, 640, 400, 470, 300)
+    scene = Scene(under=[f'<path d="{path}" fill="#ffffff" stroke="#222222" stroke-width="5" stroke-linejoin="round"/>'])
+    # Labels sit on a ring inside the coast, the last one in the middle.
+    ring = labels[:-1]
+    for i, label in enumerate(ring):
+        t = 2 * math.pi * i / len(ring) - math.pi / 2
+        x, y = 640 + 250 * math.cos(t), 400 + 150 * math.sin(t)
+        scene.texts.append(Placed((round(x - 130), round(y - 24), 260, 48), label.upper(), "ui_bold", fill="#222222"))
+    scene.texts.append(Placed((510, 376, 260, 48), labels[-1].upper(), "ui_bold", fill="#222222"))
+    return scene
+
+
 def _venn(fmt: MemeFormat, texts: dict[str, str], data: list[MemeDatum], colors: list[str], theme: Theme) -> Scene:
     three = bool(texts.get("c", "").strip())
     if three:
@@ -406,6 +476,9 @@ SCENES: dict[str, Callable[[MemeFormat, dict[str, str], list[MemeDatum], list[st
     "midwit_bell_curve": _midwit,
     "gru_plan": _gru,
     "joke_pie_3d": _joke_pie,
+    "joke_pie": _flat_pie,
+    "joke_bar": _joke_bar,
+    "labeled_map": _labeled_map,
     "venn": _venn,
     "comic_strip_3": _comic,
     "right_right": _comic,

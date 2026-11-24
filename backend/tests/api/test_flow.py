@@ -576,7 +576,7 @@ def test_redraw_all_images_uses_the_new_brand_kit(client: TestClient, sample_doc
 
 def test_meme_formats_new_ideas_and_edits(client: TestClient, sample_docx: bytes, fake_llm: FakeLLM) -> None:
     formats = client.get("/api/image-formats", params={"room": "meme"}).json()
-    assert len(formats) == 26 and {"nope_yep", "joke_pie_3d", "comic_grid_4"} <= {f["id"] for f in formats}
+    assert len(formats) == 29 and {"nope_yep", "joke_pie_3d", "comic_grid_4"} <= {f["id"] for f in formats}
     assert client.get("/api/image-formats", params={"room": "nope"}).status_code == 422
     body_kinds = client.get("/api/image-formats", params={"room": "body", "kind": "diagram"}).json()
     assert [f["id"] for f in body_kinds] == ["diagram", "illustration", "chart"]

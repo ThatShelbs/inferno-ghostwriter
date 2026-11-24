@@ -186,3 +186,46 @@ def spurious_png(texts: dict[str, str], data: list[MemeDatum], colors: tuple[str
         "config": {"axis": {"gridColor": "#efe6f5", "domainColor": "#c8bcd6"}},
     }
     return vega_to_png(spec, scale=2)
+
+
+def flat_pie_svg(slices: list[tuple[str, float]], colors: Sequence[str], cx: float, cy: float, r: float, ink: str = "#ffffff") -> str:
+    """A plain flat pie, starting at twelve o'clock and running clockwise, like an online chart maker's."""
+    parts, start = [], -math.pi / 2
+    for i, (_, pct) in enumerate(slices):
+        sweep = 2 * math.pi * pct / 100
+        end = start + sweep
+        color = colors[i % len(colors)]
+        if pct >= 99.99:
+            parts.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}"/>')
+        else:
+            x1, y1 = cx + r * math.cos(start), cy + r * math.sin(start)
+            x2, y2 = cx + r * math.cos(end), cy + r * math.sin(end)
+            large = 1 if sweep > math.pi else 0
+            parts.append(
+                f'<path d="M{cx:.1f},{cy:.1f} L{x1:.1f},{y1:.1f} A{r},{r} 0 {large} 1 {x2:.1f},{y2:.1f} Z" fill="{color}" '
+                f'stroke="{ink}" stroke-width="2"/>'
+            )
+        start = end
+    return "".join(parts)
+
+
+def bar_values(data: list[MemeDatum]) -> list[tuple[str, float]]:
+    bars = [(d.label.strip() or "?", max(0.0, d.value)) for d in data][:6]
+    if len(bars) < 2 or max(v for _, v in bars) <= 0:
+        raise ImageProviderError("The bar chart needs at least two bars, one of them above zero.")
+    return bars
+
+
+def blob_path(seed: int, cx: float, cy: float, rx: float, ry: float, points: int = 360) -> str:
+    """A smooth, irregular landmass (seeded): a few low harmonics on an ellipse, so it reads as a real shape."""
+    import random
+
+    rng = random.Random(seed)
+    # Amplitude falls off like 1/k: a few big bays and capes, then ever smaller wiggles, as a real coast does.
+    waves = [(k, rng.uniform(0.25, 0.45) / k**1.25, rng.uniform(0, 2 * math.pi)) for k in range(2, 30)]
+    coords = []
+    for i in range(points):
+        t = 2 * math.pi * i / points
+        wobble = 0.92 + sum(a * math.sin(k * t + p) for k, a, p in waves)
+        coords.append((cx + rx * wobble * math.cos(t), cy + ry * wobble * math.sin(t)))
+    return "M" + " L".join(f"{x:.1f},{y:.1f}" for x, y in coords) + " Z"

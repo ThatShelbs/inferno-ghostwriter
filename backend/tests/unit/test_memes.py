@@ -40,7 +40,7 @@ def test_every_format_renders(fmt: Any) -> None:
 
 
 def test_catalog_is_consistent() -> None:
-    assert len(FORMATS) == 26 and len({f.id for f in FORMATS}) == 26
+    assert len(FORMATS) == 29 and len({f.id for f in FORMATS}) == 29
     for fmt in FORMATS:
         names = [s.name for s in fmt.slots]
         assert len(names) == len(set(names)), fmt.id

@@ -768,6 +768,9 @@ DEMO_MEME_TEXTS: dict[str, dict[str, str]] = {
         "step4": "Nobody can compare the slices",
     },
     "joke_pie_3d": {"title": "What pie charts are good for", "footnote": "Source: every dashboard review, ever"},
+    "joke_pie": {"title": "Things the average analyst does with a pie chart", "footnote": "Source: vibes"},
+    "joke_bar": {"title": "Where the dashboard hours go", "axis": "Hours per week", "footnote": "Source: my calendar"},
+    "labeled_map": {"title": "THE DATA LAKE", "subtitle": "the confusing continent"},
     "spurious_correlation": {
         "title": "Pie charts in board decks vs. questionable decisions",
         "series_a": "Pie charts per deck",
@@ -846,6 +849,20 @@ DEMO_MEME_TEXTS: dict[str, dict[str, str]] = {
 }
 
 DEMO_MEME_DATA: dict[str, list[dict[str, Any]]] = {
+    "joke_pie": [
+        {"label": "Compare the slices", "value": 3, "series": ""},
+        {"label": "Read the labels", "value": 4, "series": ""},
+        {"label": "Squint", "value": 93, "series": ""},
+    ],
+    "joke_bar": [
+        {"label": "Building it", "value": 4, "series": ""},
+        {"label": "Using it", "value": 1, "series": ""},
+        {"label": "Meetings about it", "value": 31, "series": ""},
+    ],
+    "labeled_map": [
+        {"label": label, "value": 0, "series": ""}
+        for label in ("Raw", "Also raw", "Raw again", "Raw-ish", "Still raw", "Raw too", "Curated (lie)")
+    ],
     "joke_pie_3d": [
         {"label": "Showing two slices", "value": 6, "series": ""},
         {"label": "Diagramming pizza", "value": 9, "series": ""},
