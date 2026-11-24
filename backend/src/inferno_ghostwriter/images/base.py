@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 import io
+import logging
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
 from PIL import Image
+
+from inferno_ghostwriter.config import Settings
+from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
+from inferno_ghostwriter.llm.base import T, UsageSink
+from inferno_ghostwriter.llm.secondary import MODEL_IDS
+
+log = logging.getLogger(__name__)
 
 # Where an image sits in a post's Markdown: ``{{image:slot_id}}`` on its own line.
 PLACEHOLDER_RE = re.compile(r"\{\{image:([A-Za-z0-9_\-]+)\}\}")
@@ -13,6 +22,23 @@ PLACEHOLDER_RE = re.compile(r"\{\{image:([A-Za-z0-9_\-]+)\}\}")
 
 class ImageProviderError(RuntimeError):
     """An image could not be designed or rendered."""
+
+
+async def guest_pitches(
+    llm: LLM, settings: Settings, *, task: str, system: list[SystemBlock], prompt: str, schema: type[T], usage: UsageSink | None
+) -> list[T]:
+    async def ask(model: str) -> T | None:
+        try:
+            return await llm.structured(task=task, system=system, prompt=prompt, schema=schema, effort="medium", model=model, usage=usage)
+        except LLMError as exc:
+            log.info("Guest pitches from %s skipped: %s", model, exc)
+            return None
+
+    return [
+        ideas
+        for ideas in await asyncio.gather(*(ask(MODEL_IDS[p]) for p in dict.fromkeys(settings.secondary.ideation)))
+        if ideas is not None
+    ]
 
 
 def to_png(data: bytes) -> tuple[bytes, int, int]:

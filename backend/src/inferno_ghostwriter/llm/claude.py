@@ -19,8 +19,10 @@ from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.llm.base import (
     Citation,
     LLMError,
+    LLMLimitError,
     LLMRefusalError,
     OnDelta,
+    OnReset,
     ResearchResult,
     SystemBlock,
     T,
@@ -112,6 +114,7 @@ class ClaudeLLM:
         max_tokens: int = 64000,
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
+        on_reset: OnReset | None = None,
     ) -> str:
         client = self._client_factory()
         streamed = False
@@ -363,7 +366,7 @@ class _translate_errors:
         if isinstance(exc, anthropic.NotFoundError):
             raise LLMError(f"Model not found: check the model setting ({exc.message}).") from exc
         if isinstance(exc, anthropic.RateLimitError):
-            raise LLMError("Claude rate limit reached. Wait a minute and try again.") from exc
+            raise LLMLimitError("Claude rate limit reached. Wait a minute and try again.") from exc
         if isinstance(exc, anthropic.BadRequestError) and "credit balance" in str(exc.message).lower():
             raise LLMError(
                 "Your Anthropic API credit balance is too low. Inferno Ghostwriter bills the Claude API (Console), "

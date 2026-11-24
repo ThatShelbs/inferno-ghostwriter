@@ -21,7 +21,8 @@ from inferno_ghostwriter.idealab.portfolio import Portfolio, format_portfolio
 from inferno_ghostwriter.idealab.research import norm_label
 from inferno_ghostwriter.idealab.schemas import IdeaBatch, IdeaDraft, IdeaRanking
 from inferno_ghostwriter.jobs import JobContext
-from inferno_ghostwriter.llm import LLM, SystemBlock
+from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
+from inferno_ghostwriter.llm.secondary import MODEL_IDS
 from inferno_ghostwriter.prompts import raw, render
 from inferno_ghostwriter.writer.formulas import ARTICLE_TYPES, AUTO
 
@@ -308,6 +309,8 @@ async def _write_batch(
     taken: list[str],
     mix: dict[str, int],
     ctx: JobContext | None,
+    *,
+    model: str | None = None,
 ) -> list[Candidate]:
     batch = await llm.structured(
         task=f"ideas {approach}",
@@ -329,6 +332,7 @@ async def _write_batch(
         effort=settings.effort_idea_ideas,
         max_tokens=16000,
         usage=ctx.add_usage if ctx else None,
+        model=model,
     )
     trends = {norm_label(t.label): t for t in context.trends}
     titles = {t.lower(): t for t in context.portfolio.titles()}
@@ -452,7 +456,19 @@ async def brainstorm(
         await report(0.05 + 0.6 * done / len(mix), f"{APPROACH_LABELS[approach]}: {len(found)} ideas drafted")
         return found
 
-    drafted = await asyncio.gather(*(approach_ideas(a, n) for a, n in mix.items()))
+    async def guest_ideas(approach: str, model: str) -> list[Candidate]:
+        try:
+            return (await _write_batch(llm, settings, context, approach, 3, [], mix, ctx, model=model))[:3]
+        except LLMError as exc:
+            log.info("Guest brainstorm on %s skipped: %s", model, exc)
+            return []
+
+    guests = dict.fromkeys(settings.secondary.ideation)
+    approaches = sorted(mix, key=mix.__getitem__, reverse=True)
+    drafted = await asyncio.gather(
+        *(approach_ideas(a, n) for a, n in mix.items()),
+        *(guest_ideas(a, MODEL_IDS[p]) for a, p in zip(approaches, guests, strict=False)),
+    )
     candidates = dedupe([c for found in drafted for c in found], against)
 
     # One more batch for any approach that duplicates left short of its share.

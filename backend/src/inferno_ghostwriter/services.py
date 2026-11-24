@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import Engine
 from sqlmodel import Session
 
-from inferno_ghostwriter.config import Settings
+from inferno_ghostwriter.config import SecondaryProvider, SecondarySettings, Settings
 from inferno_ghostwriter.db import AppSetting, make_engine
 from inferno_ghostwriter.idealab.collect import HttpSignalCollector, NoSignalCollector, SignalCollector
 from inferno_ghostwriter.images import ImageService
@@ -19,6 +19,7 @@ from inferno_ghostwriter.llm.auth import ClaudeAuth
 from inferno_ghostwriter.llm.claude import ClaudeLLM
 from inferno_ghostwriter.llm.claude_code import ClaudeCodeLLM
 from inferno_ghostwriter.llm.router import RoutingLLM
+from inferno_ghostwriter.llm.secondary import SecondaryCLI
 from inferno_ghostwriter.secrets import KeyringSecretStore, SecretStore
 from inferno_ghostwriter.storage import Storage
 from inferno_ghostwriter.writer.links import HttpLinkChecker, LinkChecker, NoLinkChecker
@@ -29,6 +30,7 @@ RUNTIME_SETTINGS = (
     "claude_connection",
     "model",
     "use_fallbacks",
+    "secondary",
     "revision_passes",
     "ai_detection",
     "detector_models",
@@ -45,6 +47,7 @@ class Services:
     storage: Storage
     secrets: SecretStore
     auth: ClaudeAuth
+    secondary: dict[SecondaryProvider, SecondaryCLI]
     llm: LLM
     images: ImageService
     jobs: JobManager
@@ -58,12 +61,12 @@ class Services:
     def save_runtime_setting(self, key: str, value: Any) -> None:
         if key not in RUNTIME_SETTINGS:
             raise KeyError(key)
-        setattr(self.settings, key, value)
         with Session(self.engine) as session:
             row = session.get(AppSetting, key) or AppSetting(key=key)
-            row.value = value
+            row.value = value.model_dump() if isinstance(value, SecondarySettings) else value
             session.add(row)
             session.commit()
+        setattr(self.settings, key, value)
 
 
 def load_runtime_settings(engine: Engine, settings: Settings) -> None:
@@ -71,7 +74,8 @@ def load_runtime_settings(engine: Engine, settings: Settings) -> None:
         for key in RUNTIME_SETTINGS:
             row = session.get(AppSetting, key)
             if row is not None and row.value is not None:
-                setattr(settings, key, row.value)
+                value = SecondarySettings.model_validate(row.value) if key == "secondary" else row.value
+                setattr(settings, key, value)
         # Older versions had one switch for both trained detectors ("deep_check"): keep them selected for those authors.
         old = session.get(AppSetting, "deep_check")
         if old is not None and old.value is True and session.get(AppSetting, "detector_models") is None:
@@ -106,10 +110,16 @@ def build_services(
         secrets = KeyringSecretStore(settings.keyring_service)
         copy_legacy_secrets(secrets, KeyringSecretStore(LEGACY_KEYRING_SERVICE))
     auth = auth or ClaudeAuth(secrets)
+    secondary: dict[SecondaryProvider, SecondaryCLI] = {
+        "codex": SecondaryCLI("codex", discover=llm is None),
+        "gemini": SecondaryCLI("gemini", discover=llm is None),
+    }
     llm = llm or RoutingLLM(
         settings,
         api=ClaudeLLM(settings, auth.build_client),
         subscription=ClaudeCodeLLM(settings, auth.claude_code),
+        secondary=secondary,
+        claude_ready=lambda: auth.status(settings.claude_connection).signed_in,
     )
     images = ImageService(engine=engine, llm=llm, settings=settings, storage=storage)
     jobs = JobManager(engine, inline=inline_jobs)
@@ -119,6 +129,7 @@ def build_services(
         storage=storage,
         secrets=secrets,
         auth=auth,
+        secondary=secondary,
         llm=llm,
         images=images,
         jobs=jobs,

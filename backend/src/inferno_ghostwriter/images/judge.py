@@ -7,11 +7,13 @@
    "does this meet this bar". It says in one sentence what each picture shows to a stranger, scores it and gives one
    concrete fix. The best few are refined with their fix and shown to the author as finalists.
 
+Optional judges contribute to the score. Claude's judgment has the larger share and controls vetoes and fixes.
 Neither call ever fails an image: on an error (or a connection that cannot send pictures) the pitch order stands.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -20,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
-from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError, UsageSink
+from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError, T, UsageSink
+from inferno_ghostwriter.llm.secondary import MODEL_IDS
 from inferno_ghostwriter.prompts import raw, render
 
 log = logging.getLogger(__name__)
@@ -103,6 +106,60 @@ def _model(spec: str) -> tuple[str | None, str]:
 SYSTEM = [SystemBlock(raw("image_judge_system"), cache=True)]
 
 
+async def _review(
+    llm: LLM,
+    settings: Settings,
+    *,
+    task: str,
+    prompt: str,
+    schema: type[T],
+    usage: UsageSink | None,
+    images: list[bytes] | None = None,
+) -> tuple[T | None, list[T]]:
+    model, effort = _model(settings.image_judge)
+
+    async def ask(model_id: str | None, reasoning: str) -> T | None:
+        try:
+            return await llm.structured(
+                task=task,
+                system=SYSTEM,
+                prompt=prompt,
+                schema=schema,
+                effort=reasoning,
+                max_tokens=8000,
+                usage=usage,
+                images=images,
+                model=model_id,
+            )
+        except LLMImagesUnsupportedError:
+            return None
+        except LLMError as exc:
+            log.info("%s failed on %s: %s", task, model_id or "Claude", exc)
+            return None
+
+    guests = [
+        MODEL_IDS[provider]
+        for provider in dict.fromkeys(settings.secondary.judges)
+        if (not images or provider == "codex") and MODEL_IDS[provider] != model
+    ]
+    if not guests:
+        return await ask(model, effort), []
+    primary, *extra = await asyncio.gather(ask(model, effort), *(ask(model_id, "medium") for model_id in guests))
+    return primary, [verdict for verdict in extra if verdict is not None]
+
+
+def _blend(primary: float | None, guests: list[float], default: float) -> float:
+    if not guests:
+        return primary if primary is not None else default
+    extra = sum(guests) / len(guests)
+    return (2 * primary + extra) / 3 if primary is not None else extra
+
+
+def _pitch_total(score: PitchScore) -> float:
+    fit, clarity, surprise = [max(1, min(10, value)) for value in (score.story_fit, score.clarity, score.surprise)]
+    return fit * 0.4 + clarity * 0.35 + surprise * 0.25
+
+
 async def rank_pitches(
     llm: LLM,
     settings: Settings,
@@ -112,51 +169,43 @@ async def rank_pitches(
     punch_up: bool = False,
     usage: UsageSink | None = None,
 ) -> Ranking | None:
-    """Score pitched ideas as text; None when the judge did not answer (the pitch order then stands)."""
+    """Score pitches, preserving Claude's veto and copy decisions."""
     if not candidates:
         return None
-    model, effort = _model(settings.image_judge)
-    try:
-        verdict = await llm.structured(
-            task="image pitch judge",
-            system=SYSTEM,
-            prompt=render(
-                "image_judge_pitches",
-                context=context,
-                candidates="\n".join(f"{i}. {c}" for i, c in enumerate(candidates)),
-                count=len(candidates),
-                punch_up=(
-                    "\nThese are memes: for your top pitch, also write sharper final words for every slot as `punch_up` "
-                    "(same slots, within each limit) and set `punch_for` to its index.\n"
-                    if punch_up
-                    else ""
-                ),
+    verdict, guests = await _review(
+        llm,
+        settings,
+        task="image pitch judge",
+        prompt=render(
+            "image_judge_pitches",
+            context=context,
+            candidates="\n".join(f"{i}. {c}" for i, c in enumerate(candidates)),
+            count=len(candidates),
+            punch_up=(
+                "\nThese are memes: for your top pitch, also write sharper final words for every slot as `punch_up` "
+                "(same slots, within each limit) and set `punch_for` to its index.\n"
+                if punch_up
+                else ""
             ),
-            schema=PitchRanking,
-            effort=effort,
-            max_tokens=8000,
-            usage=usage,
-            model=model,
-        )
-    except LLMError as exc:
-        log.info("Pitch judge failed: %s", exc)
-        return None
-    by = {s.candidate: s for s in verdict.scores if 0 <= s.candidate < len(candidates)}
-    if not by:
+        ),
+        schema=PitchRanking,
+        usage=usage,
+    )
+    by = {s.candidate: s for s in verdict.scores if 0 <= s.candidate < len(candidates)} if verdict else {}
+    extra = [{s.candidate: s for s in guest.scores if 0 <= s.candidate < len(candidates)} for guest in guests]
+    extra = [row for row in extra if len(row) == len(candidates)]
+    if not by and not extra:
         return None
     totals, notes, vetoed = [], [], set()
     for i in range(len(candidates)):
         s = by.get(i)
-        if s is None:
-            totals.append(5.0)
-            notes.append("")
-            continue
-        clip = [max(1, min(10, v)) for v in (s.story_fit, s.clarity, s.surprise)]
-        totals.append(clip[0] * 0.4 + clip[1] * 0.35 + clip[2] * 0.25)
-        notes.append(s.note.strip())
-        if s.veto:
+        totals.append(_blend(_pitch_total(s) if s else None, [_pitch_total(row[i]) for row in extra], 5.0))
+        notes.append(s.note.strip() if s else next((row[i].note.strip() for row in extra if row[i].note.strip()), ""))
+        if s and s.veto:
             vetoed.add(i)
-    return Ranking(totals, notes, vetoed, verdict.punch_up if punch_up else [], verdict.punch_for if punch_up else -1)
+    return Ranking(
+        totals, notes, vetoed, verdict.punch_up if verdict and punch_up else [], verdict.punch_for if verdict and punch_up else -1
+    )
 
 
 async def judge_sheet(
@@ -173,7 +222,6 @@ async def judge_sheet(
     """Look at every drawn candidate at once; None when pictures cannot be sent or the judge did not answer."""
     if len(pngs) < 2 or len(pngs) != len(candidates):
         return None
-    model, effort = _model(settings.image_judge)
     refs = list(references)
     shown = (
         f"The first {len(refs)} attached image(s) are REFERENCES ({reference_note or 'the quality bar'}); they are not candidates. "
@@ -181,46 +229,45 @@ async def judge_sheet(
         if refs
         else f"The {len(pngs)} attached images are the candidates in order (candidate 0 first)."
     )
-    try:
-        verdict = await llm.structured(
-            task="image sheet judge",
-            system=SYSTEM,
-            prompt=render(
-                "image_judge_sheet",
-                context=context,
-                candidates="\n".join(f"{i}. {c}" for i, c in enumerate(candidates)),
-                shown=shown,
-                fidelity=(
-                    "Score `fidelity`: does each candidate read instantly as the referenced original (layout, poses, who looks "
-                    "where, signature colors, where the words sit)? A meme that does not read as its original fails.\n"
-                    if refs and reference_note.startswith("the original")
-                    else "Leave `fidelity` at 0 unless a reference is the original format.\n"
-                ),
-                count=len(pngs),
+    verdict, guests = await _review(
+        llm,
+        settings,
+        task="image sheet judge",
+        prompt=render(
+            "image_judge_sheet",
+            context=context,
+            candidates="\n".join(f"{i}. {c}" for i, c in enumerate(candidates)),
+            shown=shown,
+            fidelity=(
+                "Score `fidelity`: does each candidate read instantly as the referenced original (layout, poses, who looks "
+                "where, signature colors, where the words sit)? A meme that does not read as its original fails.\n"
+                if refs and reference_note.startswith("the original")
+                else "Leave `fidelity` at 0 unless a reference is the original format.\n"
             ),
-            schema=SheetVerdict,
-            effort=effort,
-            max_tokens=8000,
-            usage=usage,
-            images=[*refs, *pngs],
-            model=model,
-        )
-    except LLMImagesUnsupportedError:
+            count=len(pngs),
+        ),
+        schema=SheetVerdict,
+        usage=usage,
+        images=[*refs, *pngs],
+    )
+    by = {s.candidate: s for s in verdict.scores if 0 <= s.candidate < len(pngs)} if verdict else {}
+    extra = [{s.candidate: s for s in guest.scores if 0 <= s.candidate < len(pngs)} for guest in guests]
+    complete = [(guest, row) for guest, row in zip(guests, extra, strict=True) if len(row) == len(pngs)]
+    if not by and not complete:
         return None
-    except LLMError as exc:
-        log.info("Sheet judge failed: %s", exc)
-        return None
-    by = {s.candidate: s for s in verdict.scores if 0 <= s.candidate < len(pngs)}
-    if not by:
-        return None
+    lead = verdict if by else complete[0][0]
+
+    def score(item: SheetScore) -> float:
+        base = float(max(1, min(10, item.score)))
+        fid = max(0, min(10, item.fidelity))
+        return base * 0.6 + fid * 0.4 if fid else base
+
     scores, reads, fixes, fidelity = [], [], [], []
     for i in range(len(pngs)):
         s = by.get(i)
-        base = float(max(1, min(10, s.score))) if s else 4.0
-        fid = max(0, min(10, s.fidelity)) if s else 0
-        # A faithful meme matters as much as a funny one: blend fidelity in when there is an original to match.
-        scores.append(base * 0.6 + fid * 0.4 if fid else base)
-        reads.append(s.reads_as.strip() if s else "")
+        scores.append(_blend(score(s) if s else None, [score(row[i]) for _, row in complete], 4.0))
+        display = s or (complete[0][1][i] if complete else None)
+        reads.append(display.reads_as.strip() if display else "")
         fixes.append(s.fix.strip() if s else "")
-        fidelity.append(fid)
-    return Sheet(scores, reads, fixes, fidelity, verdict.why.strip())
+        fidelity.append(max(0, min(10, display.fidelity)) if display else 0)
+    return Sheet(scores, reads, fixes, fidelity, lead.why.strip() if lead else "")

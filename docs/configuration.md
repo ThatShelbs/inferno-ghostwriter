@@ -8,6 +8,7 @@ Inferno Ghostwriter works with zero configuration. Most settings live in the app
 | --- | --- | --- |
 | Claude connection: Anthropic API or your Claude subscription | Settings → Claude | Anthropic API |
 | Claude sign-in or API key | Settings → Claude | none |
+| Optional subscription connections and routing | Settings → Optional models | Claude for every stage, additional uses off |
 | Model | Settings → Advanced | `claude-opus-5-5` |
 | Voice editing passes | Settings → Advanced | 1 |
 | Refusal fallback | Settings → Advanced | on |
@@ -88,6 +89,25 @@ What to expect:
 - `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are removed from Claude Code's environment, because Claude Code would otherwise bill the API instead of your plan.
 - The refusal fallback and Inferno Ghostwriter's prompt-cache hints do not apply. Claude Code handles caching, retries and thinking itself.
 - Inferno Ghostwriter runs at most three Claude Code processes at once.
+
+## Optional subscription models
+
+Open **Settings → Optional models** after connecting Claude. The app offers two optional connections.
+
+| Connection | Model | Sign-in |
+| --- | --- | --- |
+| ChatGPT via Codex | GPT-6.2 Sol (Medium) | Install the [Codex CLI](https://developers.openai.com/codex/cli) and choose **Sign in with ChatGPT**. The app can reuse your existing Codex ChatGPT session. |
+| Google Gemini via Antigravity | Gemini 4 Argon (Medium) | Install the [Antigravity CLI](https://antigravity.google/docs/cli-getting-started) and choose **Sign in with Google**. In the terminal, complete Google's authorization flow. On macOS and Linux, run `agy acp --login` in your terminal. |
+
+Choose **Test connection** to run a small structured request. This uses a little of the connected account's model quota. Model access and limits depend on the account and plan. Google moved consumer subscription access from Gemini CLI to Antigravity. [Google's migration announcement](https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/)
+
+Every stage starts on Claude and all additional uses are off. Three ways to use the controls:
+
+- **Keep writing at the Claude limit.** Enable one or both quota fallbacks. The order you enable them is the order the app tries them. The fallback covers eligible text stages such as planning, drafting, revising and tweaking. A successful handoff replaces any partial text in the live preview.
+- **Split the editing work.** Keep Claude on the first draft, use Gemini for editorial critique, and use GPT-6.2 Sol for voice revision or a later tweak. The pipeline still uses your selected persona, voice material and the existing article checks.
+- **Get more perspectives before committing.** Add guest pitches to Idea Lab, opening images, memes and in-body images. The app checks for duplicates and runs the existing ranking or panel. Optional judges add a text vote on pitches, and Codex can also review the rendered candidates. Claude designs the artwork and leads judging when it can review the candidates.
+
+Claude handles web research and draws the images. When Claude's quota is exhausted, eligible text can finish while images that need a new Claude call may fail separately. Optional providers receive the context needed for their selected tasks, which can include the private brief, voice excerpts, article text, image references or candidate thumbnails. The app keeps routing preferences locally and leaves credentials with the CLI that owns the session. Disable all uses of a provider in Settings whenever you want to stop sending it work.
 
 ## Command line
 

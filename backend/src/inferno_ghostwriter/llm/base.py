@@ -15,11 +15,16 @@ from pydantic import BaseModel
 T = TypeVar("T", bound=BaseModel)
 
 OnDelta = Callable[[str], Awaitable[None]]
+OnReset = Callable[[], Awaitable[None]]
 UsageSink = Callable[[dict[str, int]], None]
 
 
 class LLMError(RuntimeError):
     """A model call failed in a way the user should see."""
+
+
+class LLMLimitError(LLMError):
+    """Claude reached a usage or rate limit."""
 
 
 class LLMNotConfiguredError(LLMError):
@@ -30,10 +35,10 @@ class LLMNotConfiguredError(LLMError):
 
 
 class LLMRefusalError(LLMError):
-    def __init__(self, category: str | None, explanation: str | None = None) -> None:
+    def __init__(self, category: str | None, explanation: str | None = None, *, provider: str = "Claude") -> None:
         self.category = category
         detail = f" ({category})" if category else ""
-        super().__init__(f"Claude declined this request{detail}. {explanation or ''}".strip())
+        super().__init__(f"{provider} declined this request{detail}. {explanation or ''}".strip())
 
 
 class LLMImagesUnsupportedError(LLMError):
@@ -98,6 +103,7 @@ class LLM(Protocol):
         max_tokens: int = 64000,
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
+        on_reset: OnReset | None = None,
     ) -> str: ...
 
     async def research(

@@ -116,6 +116,7 @@ Then click **New post**, describe the post, and watch it being written. Not sure
 | Service | Used for | Billing |
 | --- | --- | --- |
 | [Claude](https://platform.claude.com) (default model: Claude Opus 5.5) | Voice analysis, voice profile, planning, drafting, editing, AI-detection judge, every image | Your Claude Console (API) account by default. Or your Claude Pro/Max plan's usage limits, if you choose the **Claude subscription** connection (runs through your own Claude Code). |
+| Optional ChatGPT and Google Gemini | Writing and editing stages, Claude quota fallback, extra ideas and image-panel judges | Your own signed-in Codex CLI or Antigravity CLI. All secondary uses start off. [Setup and workflows](docs/configuration.md#optional-subscription-models) |
 
 You can switch to Claude Sonnet 5.5 (faster, cheaper) or Claude Fable 5.1 (most capable) in **Settings → Advanced**, and choose 0–2 editing passes.
 
@@ -145,7 +146,7 @@ Details: [docs/voice-pipeline.md](docs/voice-pipeline.md). To measure voice qual
 
 ## Privacy
 
-Everything stays on your computer in the `data/` folder: samples, voice profiles, posts, images, exports. API keys go into your operating system's keychain (Windows Credential Manager, macOS Keychain, Secret Service), never into files. Content is sent only to Claude, and only when you generate something. Images are drawn by Claude and rendered on your computer. Idea Lab also reads public feeds (plain requests with no key and nothing about you in them); you choose which in its Sources tab.
+The app stores samples, voice profiles, posts, images and exports in the local `data/` folder. API keys saved in the app go into your operating system's keychain. Claude receives context for generation. ChatGPT or Gemini receives task context only for the uses you enable in **Settings → Optional models**. Their CLIs manage the sign-in sessions. Claude designs the images and the app renders them on your computer. Idea Lab reads public feeds selected in its Sources tab.
 
 ## Documentation
 

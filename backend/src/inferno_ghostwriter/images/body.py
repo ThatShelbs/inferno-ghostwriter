@@ -24,12 +24,12 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.diagrams import TEMPLATES, DiagramSpec, render_diagram_png
 from inferno_ghostwriter.images.diagrams import menu as diagram_menu
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
-from inferno_ghostwriter.images.judge import judge_sheet
+from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import Scheme
 from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
@@ -147,8 +147,27 @@ class BodyRoom:
             max_tokens=8000,
             usage=usage,
         )
+        pitches = list(ideas.concepts)
+        if pitches and self.settings.secondary.ideation:
+            used = {idea.concept.strip().casefold() for idea in pitches}
+            guest_prompt = prompt + "\n\nPitch two alternatives to these existing ideas:\n" + "\n".join(idea.concept for idea in pitches)
+            results = await guest_pitches(
+                self.llm,
+                self.settings,
+                task=f"{ctx.kind} image ideas",
+                system=self.system,
+                prompt=guest_prompt,
+                schema=BodyIdeas,
+                usage=usage,
+            )
+            for guest in results:
+                for idea in guest.concepts[:2]:
+                    key = idea.concept.strip().casefold()
+                    if key and key not in used and idea.kind in kinds and anchored(idea.anchor, ctx.markdown):
+                        used.add(key)
+                        pitches.append(idea)
         concepts = []
-        for idea in ideas.concepts:
+        for idea in pitches:
             entry = idea.model_dump()
             entry["kind"] = idea.kind if idea.kind in kinds else kinds[0]
             entry["anchored"] = anchored(idea.anchor, ctx.markdown)
@@ -156,7 +175,14 @@ class BodyRoom:
         if not concepts:
             raise ImageProviderError("Claude did not pitch any ideas for this image. Click Redraw to try again.")
         # Ideas whose quote is not in the post go last; otherwise the pitcher's order stands until the judge sees them.
-        order = sorted(range(len(concepts)), key=lambda i: not concepts[i]["anchored"])
+        order = list(range(len(concepts)))
+        if self.settings.secondary.judges:
+            ranking = await rank_pitches(
+                self.llm, self.settings, context=ctx.context, candidates=[concept_text(idea) for idea in concepts], usage=usage
+            )
+            if ranking is not None:
+                order = ranking.order()
+        order.sort(key=lambda i: not concepts[i]["anchored"])
         return {"brief": ctx.brief, "concepts": [concepts[i] for i in order], "chosen": None, "tried": [], "seed": seed}
 
     # -- drawing ---------------------------------------------------------------------------

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from inferno_ghostwriter.config import Connection
+from inferno_ghostwriter.config import Connection, SecondaryProvider, SecondarySettings
 from inferno_ghostwriter.writer.dials import Dials, IncludeCode, Platform, ReferenceKind
 from inferno_ghostwriter.writer.formulas import ArticleType, FormulaOption, FormulaParts
 
@@ -52,10 +52,20 @@ class AuthTestOut(BaseModel):
     message: str
 
 
+class SecondaryStatusOut(BaseModel):
+    provider: SecondaryProvider
+    model: str
+    install_url: str
+    installed: bool
+    signed_in: bool
+    login_in_progress: bool
+
+
 class SettingsOut(BaseModel):
     claude_connection: Connection
     model: str
     use_fallbacks: bool
+    secondary: SecondarySettings
     revision_passes: int
     ai_detection: bool
     detector_models: list[str]
@@ -73,6 +83,7 @@ class SettingsIn(BaseModel):
     claude_connection: Connection | None = None
     model: str | None = None
     use_fallbacks: bool | None = None
+    secondary: SecondarySettings | None = None
     revision_passes: int | None = Field(None, ge=0, le=2)
     ai_detection: bool | None = None
     # Detector ids to use (see GET /detector); an empty list turns the detectors off.

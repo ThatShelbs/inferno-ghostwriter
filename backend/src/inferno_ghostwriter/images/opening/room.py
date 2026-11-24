@@ -32,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
 from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
@@ -664,6 +664,23 @@ class OpeningRoom:
                 concepts = retry
         if not concepts:
             raise ImageProviderError("Claude did not pitch any opening ideas. Click New idea to try again.")
+        if self.settings.secondary.ideation:
+            used = {c.concept.strip().casefold() for c in concepts}
+            pitch = (
+                prompt + "\n\nFor this guest round pitch two alternative concepts using the same style rules. "
+                "Avoid these existing ideas:\n" + "\n".join(f"- {c.concept}" for c in concepts)
+            )
+            for guest in await guest_pitches(
+                self.llm, self.settings, task="opening ideas", system=self.system, prompt=pitch, schema=OpeningIdeas, usage=usage
+            ):
+                for concept in self._clean(guest.concepts[:2], styles, fixed):
+                    key = concept.concept.strip().casefold()
+                    if not key or key in used:
+                        continue
+                    if concept.style == "data_art" and literal_objects(f"{concept.concept} {concept.content}"):
+                        continue
+                    used.add(key)
+                    concepts.append(concept)
         entries = [c.model_dump() for c in concepts]
         for entry, concept in zip(entries, concepts, strict=True):
             entry["anchored"] = anchored(concept.anchor, ctx.markdown)
