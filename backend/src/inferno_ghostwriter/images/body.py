@@ -158,6 +158,8 @@ class BodyRoom:
             raise ImageProviderError("None of the ideas for this image could be drawn. Click Redraw to try again.")
         keep = max(1, self.settings.image_finalists)
         refs = self.references.for_category("diagram", 2) if ctx.kind != "screenshot" else []
+        if any(concepts[i].get("figures") == "simple" for i, _ in options):
+            refs = [*refs, *self.references.cast_sheet()]
         sheet = await judge_sheet(
             self.llm,
             self.settings,

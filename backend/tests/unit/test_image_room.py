@@ -249,3 +249,28 @@ def test_the_reference_library_is_optional_and_finds_memes_by_name(tmp_path: Pat
 def test_meme_state_round_trips() -> None:
     state = {"version": 2, "concepts": [], "chosen": None}
     assert load_state(json.dumps(state)) == state and load_state("<svg/>") is None
+
+
+def test_painted_meme_settings_come_from_the_kit_and_are_optional(tmp_path: Path) -> None:
+    from inferno_ghostwriter.demo import meme_build_payload
+    from inferno_ghostwriter.images.memes import settings as painted
+    from inferno_ghostwriter.images.memes.formats import get_format
+    from inferno_ghostwriter.images.memes.generate import render_build
+    from inferno_ghostwriter.images.memes.specs import MemeBuild
+
+    fmt = get_format("distracted")
+    assert fmt is not None
+    build = MemeBuild.model_validate(meme_build_payload("distracted"))
+    painted.configure(tmp_path / "missing")
+    assert painted.settings_for("distracted") == {}
+    plain, _, _ = render_build(fmt, build)
+    (tmp_path / painted.KIT_FOLDER).mkdir()
+    Image.new("RGB", (1536, 1024), "#3366aa").save(tmp_path / painted.KIT_FOLDER / painted.SHEET)
+    painted.configure(tmp_path)
+    try:
+        assert painted.settings_for("distracted")["street"].startswith("data:image/png;base64,")
+        assert painted.settings_for("venn") == {}
+        over, _, _ = render_build(fmt, build)
+        assert over != plain
+    finally:
+        painted.configure(None)

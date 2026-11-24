@@ -67,7 +67,7 @@ def test_ids_are_unique_and_parse_back() -> None:
 
 
 def test_parse_id_rejects_junk() -> None:
-    for bad in ("fig-line", "fig-robot-standing", "fig-line-dance", "fig-bean-standing-plaid", "fig-line-standing-a-b", "rect-1"):
+    for bad in ("fig-line", "fig-cyborg-standing", "fig-line-dance", "fig-bean-standing-plaid", "fig-line-standing-a-b", "rect-1"):
         with pytest.raises(ValueError):
             fg.parse_id(bad)
 
@@ -76,7 +76,7 @@ def test_recolor() -> None:
     red = fg.FigureColors(shirt="#e0383e", skin="#8d5a3b", accent="#123456")
     for style in fg.STYLES:
         svg = fg.figure(style, "flashlight", colors=red).svg
-        assert "#e0383e" in svg or style == "ghost"
+        assert "#e0383e" in svg or style in ("ghost", "robot")
         assert "#123456" in svg
     assert "#8d5a3b" in fg.figure("line", "standing", colors=red).svg
     assert "#abcdef" in fg.figure("ghost", "standing", colors=red.with_(ghost="#abcdef")).svg

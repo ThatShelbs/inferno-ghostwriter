@@ -30,6 +30,7 @@ from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProvider
 from inferno_ghostwriter.images.judge import Ranking, judge_sheet, rank_pitches
 from inferno_ghostwriter.images.memes.compose import compose, scheme_for
 from inferno_ghostwriter.images.memes.formats import FALLBACK, FAMILIES, MemeFormat, build_spec, get_format, menu
+from inferno_ghostwriter.images.memes.settings import configure as configure_settings
 from inferno_ghostwriter.images.memes.specs import (
     CastPick,
     MemeBuild,
@@ -340,6 +341,7 @@ class MemeMaker:
         self.settings = settings
         self.system = [SystemBlock(raw("meme_system"), cache=True)]
         self.references = ReferenceLibrary(settings.image_reference_dir)
+        configure_settings(settings.image_reference_dir)
 
     async def make(
         self,
@@ -490,9 +492,13 @@ class MemeMaker:
             if path is not None and fmt is not None and len(paths) < 4:
                 paths.append(path)
                 names.append(fmt.name)
-        if not paths:
+        cast = self.references.cast_sheet()
+        if not paths and not cast:
             return [], ""
-        return load_png(paths, 512), "the original memes, in order: " + "; ".join(names)
+        note = "the original memes, in order: " + "; ".join(names) if paths else ""
+        if cast:
+            note = (note + "; then " if note else "") + "the house character style sheet (the cast's look to aim for)"
+        return load_png([*paths, *cast], 768), note
 
     @staticmethod
     def _remix_instruction(art: ArtDirection) -> str:

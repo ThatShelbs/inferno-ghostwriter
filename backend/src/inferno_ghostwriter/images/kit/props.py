@@ -58,6 +58,8 @@ class Stage:
     sch: Scheme
     look: str = "inferno_flat"
     prefix: str = "st"
+    # Painted settings that replace code backdrops (backdrop name -> PNG data URI; see images/memes/settings.py).
+    settings: dict[str, str] = field(default_factory=dict)
     painter: Painter = field(init=False)
     style: KitStyle = field(init=False)
     rng: random.Random = field(default_factory=lambda: random.Random(7))
@@ -117,6 +119,10 @@ def plain(st: Stage, box: Box, tone: float = 0.0) -> str:
 
 def meadow(st: Stage, box: Box, horizon: float = 0.62) -> str:
     """A sunlit meadow: pale sky, soft hills, grass tufts and a few flowers."""
+    if (painted := st.settings.get("meadow")) is not None:
+        from inferno_ghostwriter.images.memes.settings import image_svg
+
+        return image_svg(painted, box)
     x, y, w, h = box
     hy = y + h * horizon
     # Always a sunny day: the meadow is a recognizable setting, not a palette surface.
@@ -153,6 +159,10 @@ def meadow(st: Stage, box: Box, horizon: float = 0.62) -> str:
 
 def burning_room(st: Stage, box: Box, intensity: float = 1.0) -> str:
     """A cozy room engulfed in flames along the walls and ceiling, smoke under the ceiling."""
+    if (painted := st.settings.get("burning_room")) is not None:
+        from inferno_ghostwriter.images.memes.settings import image_svg
+
+        return image_svg(painted, box)
     x, y, w, h = box
     wall = "#f3d9a4" if st.sch.ramp_id != "viridis" else "#e8e2c8"
     out = [gradient_rect(st, box, mix(wall, "#5a3a22", 0.25), wall)]
@@ -242,6 +252,10 @@ def planet(st: Stage, cx: float, cy: float, r: float) -> str:
 
 def street(st: Stage, box: Box) -> str:
     """A sunny city street with soft, blurred buildings."""
+    if (painted := st.settings.get("street")) is not None:
+        from inferno_ghostwriter.images.memes.settings import image_svg
+
+        return image_svg(painted, box)
     x, y, w, h = box
     out = [gradient_rect(st, box, mix("#ffffff", st.sch.ramp[-1], 0.3), "#ffffff")]
     rng = random.Random(11)
@@ -278,6 +292,10 @@ def office(st: Stage, box: Box) -> str:
 
 def garden(st: Stage, box: Box) -> str:
     """A soft garden at dusk."""
+    if (painted := st.settings.get("garden")) is not None:
+        from inferno_ghostwriter.images.memes.settings import image_svg
+
+        return image_svg(painted, box)
     x, y, w, h = box
     out = [gradient_rect(st, box, mix(st.sch.ramp[2], "#ffffff", 0.35), mix(st.sch.ramp[-2], "#ffffff", 0.45))]
     out.append(f'<rect x="{f(x)}" y="{f(y + h * 0.72)}" width="{f(w)}" height="{f(h * 0.28)}" fill="#6fb05a"/>')
@@ -287,6 +305,10 @@ def garden(st: Stage, box: Box) -> str:
 
 
 def basement(st: Stage, box: Box) -> str:
+    if (painted := st.settings.get("basement")) is not None:
+        from inferno_ghostwriter.images.memes.settings import image_svg
+
+        return image_svg(painted, box)
     x, y, w, h = box
     out = [gradient_rect(st, box, "#3a3240", "#1c1820")]
     out.append(

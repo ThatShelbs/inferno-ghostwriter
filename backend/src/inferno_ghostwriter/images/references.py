@@ -16,6 +16,8 @@ CATEGORIES = {
     "data_art": "Data Art",
     "cartoon": "Cartoon Jokes",
     "diagram": "Others",
+    # The author's Cartoon Character Kit: the house cast and its style (and the painted meme settings, images/memes/settings.py).
+    "characters": "Cartoon Character Kit",
 }
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -73,6 +75,10 @@ class ReferenceLibrary:
 
     def for_category(self, category: str, limit: int = 2) -> list[Path]:
         return self.images(category)[:limit]
+
+    def cast_sheet(self) -> list[Path]:
+        """One character sheet showing the house cast's style (not the meme sheets, which show real people)."""
+        return [p for p in self.images("characters") if "meme" not in p.name.lower()][:1]
 
 
 def load_png(paths: Iterable[Path], max_side: int = 768) -> list[bytes]:

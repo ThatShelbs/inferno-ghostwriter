@@ -38,6 +38,7 @@ EXPRESSIONS: dict[str, Expression] = {
     "disgusted": Expression("eyes squeezed shut, frown, turning away (Drake 'nope')", "tight", "frown", (3.0, 0.0)),
     "shocked": Expression("eyes wide, brows up, mouth a small o", "wide", "o", (-4.5, -4.5)),
     "impressed": Expression("brows up, eyes on the prize, an appreciative 'ooh' (the distracted look)", "open", "o", (-3.5, -3.0)),
+    "cool": Expression("dark sunglasses and a confident grin (the house ghost Specter's signature look)", "shades", "smirk", None),
 }
 
 
@@ -128,6 +129,24 @@ def _sweat(x: float, y: float, s: float, ink: str) -> str:
     return drop(x, y, 1.0) + drop(x + 6 * s, y + 7 * s, 0.75)
 
 
+def _shades(cx: float, cy: float, spread: float, s: float, ink: str) -> str:
+    """Wraparound sunglasses: two rounded dark lenses with a bridge and a glint."""
+    lens_w, lens_h = 10.5 * s, 7.2 * s
+    out = [
+        f'<path d="M{fmt(cx - spread * s + lens_w * 0.7)} {fmt(cy - 2 * s)} H{fmt(cx + spread * s - lens_w * 0.7)}" '
+        f'stroke="{ink}" stroke-width="{fmt(2.6 * s)}" stroke-linecap="round"/>'
+    ]
+    for side in (-1, 1):
+        x = cx + side * spread * s
+        out.append(
+            f'<rect x="{fmt(x - lens_w)}" y="{fmt(cy - lens_h)}" width="{fmt(2 * lens_w)}" height="{fmt(1.7 * lens_h)}" '
+            f'rx="{fmt(4.5 * s)}" fill="#14101f" stroke="{ink}" stroke-width="{fmt(1.6 * s)}"/>'
+            f'<path d="M{fmt(x - lens_w * 0.55)} {fmt(cy - lens_h * 0.45)} L{fmt(x - lens_w * 0.1)} {fmt(cy - lens_h * 0.45)}" '
+            f'stroke="#ffffff" stroke-opacity="0.75" stroke-width="{fmt(1.8 * s)}" stroke-linecap="round"/>'
+        )
+    return "".join(out)
+
+
 def face(
     expression: str,
     *,
@@ -167,8 +186,11 @@ def face(
     eye_kind = ex.eyes
     if simple and eye_kind in ("open", "wide", "focused", "lidded"):
         eye_kind = "dot"
-    for side, x in eyes:
-        out.append(_eye(eye_kind, x, cy, side, f, ink, white, s))
+    if eye_kind == "shades":
+        out.append(_shades(cx, cy, spread, s, ink))
+    else:
+        for side, x in eyes:
+            out.append(_eye(eye_kind, x, cy, side, f, ink, white, s))
     if brows and ex.brows is not None:
         inner, outer = ex.brows
         by = cy - 8.5 * s

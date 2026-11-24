@@ -36,9 +36,9 @@ class CastRole:
 
 def _pick(cast: Cast, role: str, default: str) -> dict[str, str]:
     raw = cast.get(role) or {}
-    # People play every role, as in the original meme; the ghost only when it is cast on purpose.
+    # People play every role, as in the original meme; the ghost or robot only when cast on purpose.
     picked = raw.get("kind", "")
-    kind = "ghost" if picked == "ghost" else "person"
+    kind = picked if picked in ("ghost", "robot") else "person"
     out: dict[str, str] = {"kind": kind}
     if raw.get("expression") in EXPRESSIONS:
         out["expression"] = raw["expression"]
@@ -125,8 +125,9 @@ def this_is_fine(fmt: MemeFormat, words: dict[str, str], cast: Cast, st: Stage) 
     # The golden pup (variant 1) reads like the original and stands out from the cream wall.
     dog = ch(cast, "calm_one", "dog", "content", "sit_hold", "left", accessory="bowler", prop="mug", variant=1)
     body.append(draw(dog, tx + 60, h * 0.86, h * 0.58, sch=st.sch, look=st.look).svg)
-    body.append(kp.table(st, tx - 110, h * 0.68, 230, h * 0.2))
-    body.append(kp.flame(w * 0.5, h * 0.84, 90, 120, "#ed6925"))
+    if "burning_room" not in st.settings:  # the painted room has its own table, chair, mug and fire
+        body.append(kp.table(st, tx - 110, h * 0.68, 230, h * 0.2))
+        body.append(kp.flame(w * 0.5, h * 0.84, 90, 120, "#ed6925"))
     return clip(box, "".join(body), f"{st.prefix}-tif")
 
 

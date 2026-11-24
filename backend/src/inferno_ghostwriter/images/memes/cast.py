@@ -3,7 +3,8 @@
 Stagings still speak the casting vocabulary Claude picks from (a kind, an expression, a pose, a role). This module turns
 each pick into a figure: people in clean line art by default, dressed the way the original meme dresses that role
 (the plaid shirt and the red dress of Distracted Boyfriend, the orange puffer jacket of Drake, the sweating man in blue
-of Two Buttons), and our ghost only when Claude casts it. Animals and robots are no longer drawn; they become people.
+of Two Buttons), and the house ghost or robot (from the author's character kit) only when Claude casts them. Animals
+are not drawn; a dog or cat pick becomes a person.
 """
 
 from __future__ import annotations
@@ -115,9 +116,9 @@ def draw(ch: Any, x: float, y: float, height: float, *, sch: Scheme | None = Non
     pose = POSE.get(ch.pose, "standing")
     expression = EXPRESSION.get(ch.expression, "neutral")
     facing = "left" if ch.facing == "left" else "right"
-    if ch.kind == "ghost":
+    if ch.kind in ("ghost", "robot"):
         colors = FigureColors.from_scheme(sch) if sch is not None else None
-        sym = figure("ghost", pose, colors=colors, expression=expression, facing=facing, tag=f"g{next(_counter)}")
+        sym = figure(ch.kind, pose, colors=colors, expression=expression, facing=facing, tag=f"g{next(_counter)}")
     else:
         look = ROLE_LOOKS.get(role) or VARIANTS[ch.variant % len(VARIANTS)]
         if look.pose and (ch.pose in ("point", "stand", "wave", "proud") or role in ("distracted", "shiny")):

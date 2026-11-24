@@ -23,6 +23,7 @@ from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.demo import meme_build_payload
 from inferno_ghostwriter.images.memes.compose import compose
 from inferno_ghostwriter.images.memes.formats import FAMILIES, FORMATS, get_format
+from inferno_ghostwriter.images.memes.settings import configure as configure_settings
 from inferno_ghostwriter.images.memes.specs import MemeBuild
 from inferno_ghostwriter.images.references import ReferenceLibrary
 
@@ -116,6 +117,8 @@ def main() -> None:
     if args.real and not args.yes:
         parser.error("--real calls Claude and costs money; add --yes to confirm.")
     args.out.mkdir(parents=True, exist_ok=True)
+    # The painted meme settings come from the Cartoon Character Kit in the same library.
+    configure_settings(args.refs or Settings().image_reference_dir)
     refs = None
     if args.compare:
         refs = ReferenceLibrary(args.refs or Settings().image_reference_dir)

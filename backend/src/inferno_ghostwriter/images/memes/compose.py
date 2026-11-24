@@ -16,6 +16,7 @@ from inferno_ghostwriter.images.base import ImageProviderError
 from inferno_ghostwriter.images.kit.props import Stage
 from inferno_ghostwriter.images.memes import charts
 from inferno_ghostwriter.images.memes.formats import ArtRegion, Box, MemeFormat
+from inferno_ghostwriter.images.memes.settings import settings_for
 from inferno_ghostwriter.images.memes.specs import MemeDatum, MemeText
 from inferno_ghostwriter.images.memes.stagings import Cast, stage_art
 from inferno_ghostwriter.images.memes.text import STYLES, Fitted, draw_fitted, fit_text
@@ -576,7 +577,7 @@ def compose(
 
     regions = "".join(region_svg(region, art[region.name]) for region in fmt.regions if art.get(region.name, "").strip())
     if fmt.staged:
-        stage = Stage(sch, prefix=f"m-{fmt.id}")
+        stage = Stage(sch, prefix=f"m-{fmt.id}", settings=settings_for(fmt.id))
         regions = stage_art(fmt, words, cast or {}, stage, panels) + regions
     svg = (
         f'<svg xmlns="{SVG_NS}" xmlns:xlink="{XLINK_NS}" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'

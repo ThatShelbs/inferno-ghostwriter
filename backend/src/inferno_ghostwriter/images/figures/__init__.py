@@ -20,7 +20,7 @@ import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
-from inferno_ghostwriter.images.figures import bean, ghost, line
+from inferno_ghostwriter.images.figures import bean, ghost, line, robot
 from inferno_ghostwriter.images.figures.base import SKIN_TONES, FigureColors, Point, SvgSymbol, fmt
 from inferno_ghostwriter.images.figures.faces import EXPRESSIONS
 from inferno_ghostwriter.images.figures.poses import POSES
@@ -49,10 +49,11 @@ STYLES: dict[str, str] = {
     "bean": "flat rounded figure, round head, two white dot eyes, no outline; body in `shirt`",
     "line": "line-art person with an expressive face, ink outlines, flat fills; for memes",
     "ghost": "the house mascot: a friendly spectral ghost with rosy cheeks, floating over its shadow",
+    "robot": "a friendly house robot: glossy white shell, dark visor with a glowing cyan face, a glowing chest core",
 }
 OUTFITS = line.OUTFITS
 HAIRS = line.HAIRS
-_VIEW_BOX = {"bean": bean.VIEW_BOX, "line": line.VIEW_BOX, "ghost": ghost.VIEW_BOX}
+_VIEW_BOX = {"bean": bean.VIEW_BOX, "line": line.VIEW_BOX, "ghost": ghost.VIEW_BOX, "robot": robot.VIEW_BOX}
 _TAG = re.compile(r"^[a-z0-9]{1,16}$")
 _RESERVED = {"left", "right", *EXPRESSIONS, *OUTFITS, *HAIRS, *STYLES, *POSES}
 _ID = re.compile(r"#(fig-[a-z0-9_-]+)")
@@ -160,7 +161,7 @@ def figure(
         raise ValueError(f"Unknown hair {hair!r}")
     c = colors or FigureColors()
     info = POSES[pose]
-    defaults = {"ghost": ghost.DEFAULTS, "bean": bean.DEFAULTS}.get(style, {})
+    defaults = {"ghost": ghost.DEFAULTS, "bean": bean.DEFAULTS, "robot": robot.DEFAULTS}.get(style, {})
     expr = expression or defaults.get(pose, info.expression)
     f_head = -1 if info.looks_back else 1
     sid = figure_id(style, pose, expression=expression, outfit=outfit, hair=hair, facing=facing, tag=tag)
@@ -168,6 +169,8 @@ def figure(
         body, anchors = line.draw(pose, c, expr, sid, outfit=outfit or "tee", hair=hair or "short", f_head=f_head)
     elif style == "ghost":
         body, anchors = ghost.draw(pose, c, expr, sid, f_head=f_head)
+    elif style == "robot":
+        body, anchors = robot.draw(pose, c, expr, sid, f_head=f_head)
     else:
         body, anchors = bean.draw(pose, c, expr, sid, f_head=f_head)
     vb = _VIEW_BOX[style]
