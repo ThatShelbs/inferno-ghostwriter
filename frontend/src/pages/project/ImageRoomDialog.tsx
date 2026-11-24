@@ -1,5 +1,5 @@
-import { Lightbulb, RefreshCw } from 'lucide-react'
-import { useState } from 'react'
+import { ImagePlus, Lightbulb, RefreshCw, X } from 'lucide-react'
+import { useRef, useState } from 'react'
 
 import type { ImageFormatOut, ImageRoomOut, PitchOut } from '../../api/types.gen'
 import { Badge, Button, Dialog, Field, Select, Textarea } from '../../components/ui'
@@ -24,6 +24,9 @@ export function ImageRoomDialog({
   onPick,
   onPitch,
   onFormat,
+  referenceUrl,
+  onReference,
+  onClearReference,
 }: {
   open: boolean
   onClose: () => void
@@ -33,8 +36,13 @@ export function ImageRoomDialog({
   /** Pitch new ideas, with the author's steer ('' for none). */
   onPitch: (note: string) => void
   onFormat: (id: string, note: string) => void
+  /** The author's style reference for this image, if any, and how to set or clear it. */
+  referenceUrl?: string | null
+  onReference?: (file: File) => void
+  onClearReference?: () => void
 }) {
   const [note, setNote] = useState('')
+  const fileInput = useRef<HTMLInputElement>(null)
   const ranked = rankPitches(room.pitches ?? [])
   const groups = [...new Set(formats.map((f) => f.group))]
 
@@ -87,6 +95,36 @@ export function ImageRoomDialog({
               </Select>
             )}
           </div>
+          {onReference && (
+            <div className="flex flex-wrap items-center gap-3 border-t border-line pt-3" aria-label="Style reference">
+              {referenceUrl ? <img src={referenceUrl} alt="Your style reference" className="h-14 rounded-md border border-line" /> : null}
+              <p className="min-w-48 flex-1 text-xs text-muted">
+                {referenceUrl
+                  ? 'Every draw of this image now aims for the look of your reference (never its content).'
+                  : 'Make it like this: attach any image whose look you want; the designer and the judge both see it.'}
+              </p>
+              <Button size="sm" variant="secondary" icon={<ImagePlus className="size-4" />} onClick={() => fileInput.current?.click()}>
+                {referenceUrl ? 'Change reference' : 'Add a style reference'}
+              </Button>
+              {referenceUrl && onClearReference && (
+                <Button size="sm" variant="ghost" icon={<X className="size-4" />} onClick={onClearReference}>
+                  Remove
+                </Button>
+              )}
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                aria-label="Upload a style reference"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) onReference(file)
+                  e.target.value = ''
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </Dialog>

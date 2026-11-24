@@ -358,6 +358,9 @@ class ProjectImage(SQLModel, table=True):
     # The best candidates of the last fresh run, the current one included: each has its own file and source, and the
     # author swaps between them with no model call (``ImageService.pick``).
     finalists: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+    # A style reference the author attached ("make it like this"): a file in the project's image folder, shown to the
+    # designer and the judge on every draw of this image; never published. "" = none.
+    reference: str = ""
 
 
 class ProjectReference(SQLModel, table=True):

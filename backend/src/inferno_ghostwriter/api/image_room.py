@@ -62,11 +62,14 @@ def image_out(image: ProjectImage) -> ImageOut:
         for i, entry in enumerate(image.history)
     ]
     return ImageOut(
-        **image.model_dump(exclude={"history", "spec", "file_name", "project_id", "anchor", "remix", "ideas", "finalists", "rating"}),
+        **image.model_dump(
+            exclude={"history", "spec", "file_name", "project_id", "anchor", "remix", "ideas", "finalists", "rating", "reference"}
+        ),
         url=image_url(image),
         history=history,
         room=room_info(image),
         finalists=finalists_out(image),
+        reference_url=f"/api/images/{image.id}/reference/file?v={image.reference}" if image.reference else None,
         remix=remix_info(image),
         remix_dimensions=list(remix_dimensions(image)),
     )

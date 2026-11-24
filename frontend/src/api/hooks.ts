@@ -698,6 +698,16 @@ export function useImageMutations(projectId: number) {
     edit: useMutation({
       mutationFn: ({ id, instruction }: { id: number; instruction: string }) => api.post<JobOut>(`/api/images/${id}/edit`, { instruction }),
     }),
+    /** Attach a style reference ("make it like this"); the designer and the judge see it on every draw of this image. */
+    setReference: useMutation({
+      mutationFn: ({ id, file }: { id: number; file: File }) => {
+        const form = new FormData()
+        form.append('file', file)
+        return api.post<ImageOut>(`/api/images/${id}/reference`, form)
+      },
+      onSuccess: refresh,
+    }),
+    clearReference: useMutation({ mutationFn: (id: number) => api.del<ImageOut>(`/api/images/${id}/reference`), onSuccess: refresh }),
     upload: useMutation({
       mutationFn: ({ id, file }: { id: number; file: File }) => {
         const form = new FormData()

@@ -906,6 +906,34 @@ async def edit_image(image_id: int, body: ImageEditIn, session: SessionDep, serv
     return await _image_job(services, session, image_id, instruction=body.instruction)
 
 
+@router.post("/images/{image_id}/reference", response_model=ImageOut)
+async def set_reference(image_id: int, session: SessionDep, services: ServicesDep, file: Annotated[UploadFile, File()]) -> ImageOut:
+    """Attach a style reference ("make it like this"): the designer and the judge see it on every draw of this image."""
+    image_or_404(session, image_id)
+    data = await file.read(MAX_IMAGE_BYTES + 1)
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(413, "Images must be 15 MB or smaller.")
+    try:
+        png, _, _ = to_png(data)
+    except Exception as exc:
+        raise HTTPException(422, "That file is not an image Inferno Ghostwriter can read.") from exc
+    return image_out(services.images.set_reference(image_id, png))
+
+
+@router.delete("/images/{image_id}/reference", response_model=ImageOut)
+def clear_reference(image_id: int, session: SessionDep, services: ServicesDep) -> ImageOut:
+    image_or_404(session, image_id)
+    return image_out(services.images.set_reference(image_id, None))
+
+
+@router.get("/images/{image_id}/reference/file")
+def reference_file(image_id: int, session: SessionDep, services: ServicesDep) -> FileResponse:
+    image = image_or_404(session, image_id)
+    if not image.reference:
+        raise HTTPException(404, "This image has no style reference.")
+    return _image_file(services, image, image.reference)
+
+
 @router.post("/images/{image_id}/upload", response_model=ImageOut)
 async def upload_image(
     image_id: int,

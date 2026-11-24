@@ -32,7 +32,7 @@ from inferno_ghostwriter.images.render import svg_to_png, vega_to_png
 from inferno_ghostwriter.images.specs import ChartSpec, SvgSpec
 from inferno_ghostwriter.images.story import anchored, deal
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
-from inferno_ghostwriter.llm.base import UsageSink
+from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError, UsageSink
 from inferno_ghostwriter.prompts import raw, render
 
 log = logging.getLogger(__name__)
@@ -225,10 +225,25 @@ class BodyRoom:
             builds_on=ctx.builds_on,
             context=ctx.context,
         )
-        return await self.design(kind, prompt, task=f"{kind} image design", palette=ctx.palette, scheme=ctx.scheme, usage=usage)
+        if ctx.reference is not None:
+            prompt += (
+                "\nThe author attached the image shown as a style reference: match its look (layout style, color use, "
+                "shapes, type, polish), not its content.\n"
+            )
+        return await self.design(
+            kind, prompt, task=f"{kind} image design", palette=ctx.palette, scheme=ctx.scheme, reference=ctx.reference, usage=usage
+        )
 
     async def design(
-        self, kind: str, prompt: str, *, task: str, palette: tuple[str, ...] = (), scheme: Scheme | None = None, usage: UsageSink | None
+        self,
+        kind: str,
+        prompt: str,
+        *,
+        task: str,
+        palette: tuple[str, ...] = (),
+        scheme: Scheme | None = None,
+        reference: bytes | None = None,
+        usage: UsageSink | None,
     ) -> Drawn:
         """Ask Claude for the design and draw it; a design that cannot be drawn gets one more try with the error quoted."""
 
@@ -236,15 +251,21 @@ class BodyRoom:
             schema: type[S], draw: Callable[[S, bool], tuple[bytes, int, int]]
         ) -> tuple[S, tuple[bytes, int, int]]:
             async def ask(note: str) -> S:
-                return await self.llm.structured(
-                    task=task,
-                    system=self.system,
-                    prompt=prompt + note,
-                    schema=schema,
-                    effort=self.settings.effort_images,
-                    max_tokens=24000,
-                    usage=usage,
-                )
+                kwargs: dict[str, Any] = {
+                    "task": task,
+                    "system": self.system,
+                    "prompt": prompt + note,
+                    "schema": schema,
+                    "effort": self.settings.effort_images,
+                    "max_tokens": 24000,
+                    "usage": usage,
+                }
+                if reference is None:
+                    return await self.llm.structured(**kwargs)
+                try:
+                    return await self.llm.structured(**kwargs, images=[reference])
+                except LLMImagesUnsupportedError:
+                    return await self.llm.structured(**kwargs)
 
             return await draw_with_retry(ask, draw)
 

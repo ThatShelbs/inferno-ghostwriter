@@ -275,6 +275,9 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           onPick={(index) => redraw(false, { concept: index })}
           onPitch={(note) => redraw(true, { note })}
           onFormat={(id, note) => redraw(false, { format: id, note })}
+          referenceUrl={image.reference_url}
+          onReference={(file) => mutations.setReference.mutate({ id: image.id, file })}
+          onClearReference={() => mutations.clearReference.mutate(image.id)}
         />
       )}
       {open === 'words' && (

@@ -437,6 +437,8 @@ class MemeMaker:
 
         keep = max(1, self.settings.image_finalists)
         refs, ref_note = self._meme_references([c.fmt.id for c in drawn])
+        if art.reference is not None:
+            refs, ref_note = [*refs, art.reference], (ref_note + "; " if ref_note else "") + "the last one is the author's style reference"
         sheet = await judge_sheet(
             self.llm,
             self.settings,

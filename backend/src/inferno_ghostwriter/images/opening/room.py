@@ -414,6 +414,8 @@ class OpeningRoom:
         keep = max(1, self.settings.image_finalists)
         labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
         refs, note = self._references([concepts[o[0]].style for o in options], [o[2] for o in options])
+        if art.reference is not None:
+            refs, note = [*refs, art.reference], (note + "; " if note else "") + "the last one is the author's style reference"
         sheet = await judge_sheet(
             self.llm,
             self.settings,

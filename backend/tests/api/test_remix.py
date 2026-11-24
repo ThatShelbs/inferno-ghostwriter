@@ -138,3 +138,21 @@ def test_redraw_and_remix_build_on_an_edited_image(client: TestClient, sample_do
     fake_llm.calls.clear()
     client.post(f"/api/images/{diagram['id']}/redraw", json={})
     assert "<edits>" not in next(c for c in fake_llm.calls if c["task"] == "diagram image design")["prompt"]
+
+
+def test_a_style_reference_reaches_the_designer_and_can_be_removed(client: TestClient, sample_docx: bytes, fake_llm: FakeLLM) -> None:
+    import io
+
+    from PIL import Image
+
+    project = make_post(client, sample_docx)
+    diagram = next(i for i in images(client, project).values() if i["kind"] == "diagram")
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 40), "teal").save(buf, format="PNG")
+    out = client.post(f"/api/images/{diagram['id']}/reference", files={"file": ("ref.png", buf.getvalue(), "image/png")}).json()
+    assert out["reference_url"] and client.get(out["reference_url"]).status_code == 200
+    fake_llm.calls.clear()
+    assert client.post(f"/api/images/{diagram['id']}/redraw", json={"improve": False}).json()["status"] == "succeeded"
+    design = next(c for c in fake_llm.calls if c["task"] == "diagram image design")
+    assert design["images"] == 1 and "style reference" in design["prompt"]
+    assert client.delete(f"/api/images/{diagram['id']}/reference").json()["reference_url"] is None

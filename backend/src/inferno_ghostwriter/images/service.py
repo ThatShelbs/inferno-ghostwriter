@@ -24,7 +24,7 @@ from sqlmodel import Session, col, select
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage
 from inferno_ghostwriter.images import remix as remixing
-from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError
+from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, thumbnail_png
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
 from inferno_ghostwriter.images.memes import (
     ArtDirection,
@@ -322,7 +322,22 @@ class ImageService:
             return True
         return may_be_meme(resolved.opening_style, resolved.opening_eligible)
 
+    def set_reference(self, image_id: int, png: bytes | None) -> ProjectImage:
+        """Attach (or with None, remove) a style reference for this image's next draws."""
+        image = self._get(image_id)
+        name = ""
+        if png is not None:
+            name = f"{image.slot_id}-reference-{uuid4().hex[:8]}.png"
+            (self.storage.image_dir(image.project_id) / name).write_bytes(png)
+        return self._save(image_id, {"reference": name}, record=False)
+
     # -- internals -------------------------------------------------------------
+
+    def _reference(self, image: ProjectImage) -> bytes | None:
+        if not image.reference:
+            return None
+        path = self.storage.image_dir(image.project_id) / image.reference
+        return thumbnail_png(path.read_bytes()) if path.exists() else None
 
     def _get(self, image_id: int) -> ProjectImage:
         with Session(self.engine) as session:
@@ -350,7 +365,7 @@ class ImageService:
         remix: bool,
         usage: UsageSink | None,
     ) -> dict[str, Any]:
-        art = replace(self._art_direction(brand_kit, persona, voice_profile), note=note)
+        art = replace(self._art_direction(brand_kit, persona, voice_profile), note=note, reference=self._reference(image))
         remixed: dict[str, Any] | None = None
         picked = concept is not None or format is not None
         # A redraw or remix builds on the author's edits; picking another idea or rethinking starts over.

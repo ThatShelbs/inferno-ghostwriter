@@ -126,6 +126,10 @@ export interface BaselineDiffOut {
   segments: DiffSegment[];
 }
 
+export interface Body_set_reference_api_images__image_id__reference_post {
+  file: string;
+}
+
 export interface Body_upload_image_api_images__image_id__upload_post {
   file: string;
 }
@@ -581,6 +585,7 @@ export interface ImageOut {
   history: ImageHistoryOut[];
   room?: ImageRoomOut | null;
   finalists?: FinalistOut[];
+  reference_url?: string | null;
   builds_on?: string;
   remix?: RemixOut | null;
   remix_dimensions?: string[];

@@ -668,6 +668,8 @@ class ImageOut(BaseModel):
     # The ideas board (every image Claude drew has one; None for uploads and older images).
     room: ImageRoomOut | None = None
     finalists: list[FinalistOut] = []
+    # The author's style reference for this image ("make it like this"), or None.
+    reference_url: str | None = None
     # The slot id of the earlier image this one extends ("" = stands alone); both are drawn from one source.
     builds_on: str = ""
     # What the last redraw tried; None before the first redraw.
