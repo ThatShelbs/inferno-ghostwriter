@@ -14,22 +14,51 @@ from PIL import Image, ImageDraw
 
 from inferno_ghostwriter.images.base import ImageProviderError
 from inferno_ghostwriter.images.kit.props import Stage
-from inferno_ghostwriter.images.kit.style import kit_style
 from inferno_ghostwriter.images.memes import charts
 from inferno_ghostwriter.images.memes.formats import ArtRegion, Box, MemeFormat
-from inferno_ghostwriter.images.memes.looks import BY_ID as LOOKS_BY_ID
-from inferno_ghostwriter.images.memes.looks import DEFAULT_LOOK, Theme
 from inferno_ghostwriter.images.memes.specs import MemeDatum, MemeText
 from inferno_ghostwriter.images.memes.stagings import Cast, stage_art
 from inferno_ghostwriter.images.memes.text import STYLES, Fitted, draw_fitted, fit_text
-from inferno_ghostwriter.images.palettes import Scheme
+from inferno_ghostwriter.images.palettes import INK_DARK, SURFACES, Scheme, brand_scheme, contrast, house_ramp, scheme
 from inferno_ghostwriter.images.render import SVG_NS, parse_xml, svg_to_png
 
 XLINK_NS = "http://www.w3.org/1999/xlink"
 INK = "#14101f"
 BUBBLE_PAD = 24
 BUBBLE_TAIL = 46
-INFERNO = LOOKS_BY_ID[DEFAULT_LOOK].theme
+
+
+@dataclass(frozen=True)
+class Theme:
+    """The colors the composer paints templates with (comic gutters, chat header, chart marks, alignment bands)."""
+
+    dark: str  # gutters, headers, dark surfaces
+    paper: str  # light chart and card backgrounds
+    ink: str  # outlines, frames, bubble borders
+    accents: tuple[str, ...]  # six chart and avatar colors, most vivid first
+    bands: tuple[str, str, str]  # three dark colors that carry white text
+    bubble_fill: str = "#ffffff"
+
+
+def theme_for(sch: Scheme) -> Theme:
+    """The template colors in a scheme."""
+    light = brand_scheme(sch.ramp, "white") if sch.ramp_id == "brand" else scheme(sch.ramp_id, "white")
+    dark = sch.bg if sch.dark else mix(sch.ramp[1], "#000000", 0.15)
+    paper = sch.bg if not sch.dark else SURFACES["paper"]
+    bands = [c for c in reversed(sch.ramp) if contrast(c, "#ffffff") >= 4.5]
+    if len(bands) >= 3:
+        picked = (bands[0], bands[len(bands) // 2], bands[-1])
+    else:
+        deep = sorted(sch.ramp, key=lambda c: contrast(c, "#ffffff"))
+        picked = (deep[-1], deep[-1], deep[-1]) if len(deep) < 3 else (deep[-3], deep[-2], deep[-1])
+    return Theme(dark, paper, INK_DARK, light.accents, picked)
+
+
+def scheme_for(palette: tuple[str, ...] = (), sch: Scheme | None = None) -> Scheme:
+    """The scheme a meme is painted in: a brand palette (3+ colors that are not a house ramp) wins."""
+    if len(palette) >= 3 and house_ramp(palette) is None:
+        return brand_scheme(palette)
+    return sch or scheme("inferno", "near_black")
 
 
 def mix(a: str, b: str, t: float) -> str:
@@ -403,18 +432,16 @@ def compose(
     data: list[MemeDatum] | None = None,
     *,
     palette: tuple[str, ...] = (),
-    theme: Theme | None = None,
-    look: str = DEFAULT_LOOK,
     sch: Scheme | None = None,
     cast: Cast | None = None,
     panels: list[dict] | None = None,
 ) -> tuple[bytes, int, int]:
     """Render one meme to PNG; raises ImageProviderError when the build cannot be drawn.
 
-    A brand ``palette`` (3+ hex colors) recolors the template's chart marks; otherwise they use the ``theme``'s accents
-    (inferno when none is given)."""
+    A brand ``palette`` (3+ hex colors) recolors the template; otherwise the scheme ``sch`` does (inferno when none)."""
     data = data or []
-    theme = theme or INFERNO
+    sch = scheme_for(palette, sch)
+    theme = theme_for(sch)
     colors = list(palette) if len(palette) >= 3 else list(theme.accents)
     words = {name: t.text.strip() for name, t in texts.items()}
     if fmt.id == "spurious_correlation":
@@ -476,7 +503,7 @@ def compose(
 
     regions = "".join(region_svg(region, art[region.name]) for region in fmt.regions if art.get(region.name, "").strip())
     if fmt.staged:
-        stage = Stage(sch or LOOKS_BY_ID.get(look, LOOKS_BY_ID[DEFAULT_LOOK]).default_scheme, look, prefix=f"m-{fmt.id}")
+        stage = Stage(sch, prefix=f"m-{fmt.id}")
         regions = stage_art(fmt, words, cast or {}, stage, panels) + regions
     svg = (
         f'<svg xmlns="{SVG_NS}" xmlns:xlink="{XLINK_NS}" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
@@ -487,38 +514,9 @@ def compose(
 
     with Image.open(io.BytesIO(png)) as source:
         img = source.convert("RGB")
-    cell = kit_style(look).pixel
-    if cell:
-        # Pixel looks: the art is snapped to a coarse grid; the text drawn next stays crisp.
-        small = img.resize((max(1, img.width // cell), max(1, img.height // cell)), Image.Resampling.BOX)
-        img = small.resize((small.width * cell, small.height * cell), Image.Resampling.NEAREST).crop((0, 0, img.width, img.height))
-        if img.size != (width, height):
-            img = img.resize((width, height), Image.Resampling.NEAREST)
     draw = ImageDraw.Draw(img)
     for fitted, box, style_name, align, valign, fill in drawn:
         draw_fitted(draw, fitted, box, STYLES[style_name], align=align, valign=valign, fill=fill)
     out = io.BytesIO()
     img.save(out, format="PNG", optimize=True)
     return out.getvalue(), img.width, img.height
-
-
-MASCOT_SCENE = """
-<defs>
-  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b0c41"/><stop offset="1" stop-color="#a52c60"/></linearGradient>
-  <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#fcffa4"/><stop offset="1" stop-color="#fb9b06" stop-opacity="0"/></radialGradient>
-  <linearGradient id="body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a52c60"/><stop offset="0.6" stop-color="#ed6925"/><stop offset="1" stop-color="#f7d13d"/></linearGradient>
-</defs>
-<rect width="1080" height="1080" fill="url(#bg)"/>
-<circle cx="540" cy="560" r="330" fill="#ed6925" opacity="0.16"/>
-<ellipse cx="540" cy="840" rx="260" ry="34" fill="#000004" opacity="0.3"/>
-<path d="M340,800 C300,560 340,300 540,300 C740,300 780,560 740,800 C700,760 670,830 630,780 C590,830 560,760 520,790 C480,830 450,760 410,800 C380,780 360,830 340,800 Z" fill="url(#body)" stroke="#14101f" stroke-width="6" stroke-linejoin="round"/>
-<ellipse cx="470" cy="500" rx="34" ry="50" fill="#1b0c41"/><ellipse cx="610" cy="500" rx="34" ry="50" fill="#1b0c41"/>
-<ellipse cx="480" cy="484" rx="12" ry="17" fill="#fcffa4"/><ellipse cx="620" cy="484" rx="12" ry="17" fill="#fcffa4"/>
-<path d="M500,580 Q540,615 580,580" stroke="#1b0c41" stroke-width="10" fill="none" stroke-linecap="round"/>
-<rect x="400" y="700" width="280" height="150" rx="14" fill="#2a1b47" stroke="#14101f" stroke-width="6"/>
-<rect x="416" y="714" width="248" height="112" rx="8" fill="#4a0c6b"/>
-<circle cx="540" cy="770" r="22" fill="#f7d13d" opacity="0.9"/>
-<path d="M740,640 C800,560 840,470 880,380" stroke="#fcffa4" stroke-width="14" fill="none" stroke-linecap="round"/>
-<path d="M880,380 C930,360 960,330 970,290 C930,320 900,330 880,380 Z" fill="#fcffa4" stroke="#14101f" stroke-width="4"/>
-<circle cx="540" cy="226" r="0" fill="url(#glow)"/>
-"""

@@ -53,7 +53,7 @@ def test_pitched_ideas_and_redraw_all_skip_the_brainstorm(client: TestClient, sa
     project = make_post(client, sample_docx, opening_style="cheat_sheet")
     hero = images(client, project)["hero"]
     fake_llm.calls.clear()
-    assert client.post(f"/api/images/{hero['id']}/redraw", json={"opening_concept": 1}).json()["status"] == "succeeded"
+    assert client.post(f"/api/images/{hero['id']}/redraw", json={"concept": 1}).json()["status"] == "succeeded"
     assert "image improvement plan" not in fake_llm.tasks()
     fake_llm.calls.clear()
     assert client.post(f"/api/projects/{project['id']}/images/redraw").json()["status"] == "succeeded"
@@ -64,21 +64,21 @@ def test_pitched_ideas_and_redraw_all_skip_the_brainstorm(client: TestClient, sa
 def test_the_opening_image_can_open_with_any_meme_format(client: TestClient, sample_docx: bytes, fake_llm: FakeLLM) -> None:
     project = make_post(client, sample_docx, humor=1)
     hero = images(client, project)["hero"]
-    assert hero["meme"] is None and hero["opening"]["style"] != "meme"
+    assert hero["room"]["format"] != "meme"
 
-    assert client.post(f"/api/images/{hero['id']}/redraw", json={"meme_format": "nope"}).status_code == 422
+    assert client.post(f"/api/images/{hero['id']}/redraw", json={"format": "nope"}).status_code == 422
     fake_llm.calls.clear()
-    done = client.post(f"/api/images/{hero['id']}/redraw", json={"meme_format": "venn"})
+    done = client.post(f"/api/images/{hero['id']}/redraw", json={"format": "venn"})
     assert done.json()["status"] == "succeeded", done.text
     opened = images(client, project)["hero"]
-    assert opened["opening"]["style"] == "meme" and opened["meme"]["format"] == "venn"
+    assert opened["room"]["format"] == "meme" and any(s["name"] for s in opened["room"]["slots"])
     ideas = next(c for c in fake_llm.calls if c["task"] == "meme ideas")
     assert "Pitch the opening meme" in ideas["prompt"]
     # The earlier opening pitches stay on the board next to the new meme.
-    assert len(opened["opening"]["pitches"]) > 1
-    # Now it is a meme, so the closing bank's tools work on it too.
-    assert client.post(f"/api/images/{hero['id']}/redraw", json={"meme_format": "nutrition_label"}).json()["status"] == "succeeded"
-    assert images(client, project)["hero"]["meme"]["format"] == "nutrition_label"
+    assert len(opened["room"]["pitches"]) > 1
+    # Another format from the bank works on it too.
+    assert client.post(f"/api/images/{hero['id']}/redraw", json={"format": "nutrition_label"}).json()["status"] == "succeeded"
+    assert images(client, project)["hero"]["room"]["format"] == "meme"
 
 
 def test_an_image_can_build_on_an_earlier_one_and_follows_it(client: TestClient, sample_docx: bytes, fake_llm: FakeLLM) -> None:

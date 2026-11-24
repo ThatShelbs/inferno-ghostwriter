@@ -19,10 +19,10 @@ def test_changing_the_meme_format_fixes_the_text_around_it(client: TestClient, s
     project = ready_post(client, sample_docx)
     url = f"/api/projects/{project['id']}"
     meme = _image(client, project["id"], "meme")
-    other = "nutrition_label" if meme["meme"]["format"] != "nutrition_label" else "venn"
+    other = "nutrition_label" if meme["room"]["format"] != "nutrition_label" else "venn"
     fake_llm.calls.clear()
 
-    job = client.post(f"/api/images/{meme['id']}/redraw", json={"meme_format": other}).json()
+    job = client.post(f"/api/images/{meme['id']}/redraw", json={"format": other}).json()
     assert job["status"] == "succeeded", job
     assert job["result"]["text_edits"] == 1 and job["result"]["text_summary"]
     call = next(c for c in fake_llm.calls if c["task"] == "image text sync")

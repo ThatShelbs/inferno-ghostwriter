@@ -24,7 +24,6 @@ from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom,
 from inferno_ghostwriter.images.opening.specs import OpeningBuild, OpeningIdeas
 from inferno_ghostwriter.images.opening.styles import BY_ID, STYLES, clean_style, eligible, suggested
 from inferno_ghostwriter.images.opening.templates import TEMPLATES, apply_words, draw, slot_texts, validate
-from inferno_ghostwriter.images.panel import FinalPick
 from inferno_ghostwriter.llm.base import Citation, LLMImagesUnsupportedError
 from inferno_ghostwriter.writer.dials import Dials, resolve
 from inferno_ghostwriter.writer.formulas import ARTICLE_TYPES, OPENERS
@@ -174,31 +173,6 @@ def test_waterfall_steps_may_be_differences_but_words_may_not() -> None:
 # -- the room ------------------------------------------------------------------------------------
 
 
-async def test_auto_pitches_mix_styles_and_the_panel_picks_the_winner() -> None:
-    llm = FakeLLM()
-    room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
-    result = await room.make("", context(), ART)
-    state = load_state(result.spec)
-    assert state is not None and state["mode"] == "auto" and len(state["concepts"]) == 6
-    styles = [c["style"] for c in state["concepts"]]
-    assert styles.count("editorial") >= 2 and "data_art" in styles and styles[0] == "cheat_sheet"
-    assert state["chosen"] == 0 and state["style"] == "cheat_sheet" and state["template"] == "cheat_grid"
-    assert all(set(c["panel"]) >= {"total", "vetoed", "note", "seats"} for c in state["concepts"])
-    assert state["review"]["verdict"] == "passed" and result.provider == "claude-opening" and state["scheme"]
-    # The pitch panel is many seats at once on mixed models; the two best concepts are built and judged as pictures.
-    tasks = llm.tasks()
-    assert tasks[0] == "opening ideas" and {"panel scroller", "panel art_director", "panel fact_checker"} <= set(tasks)
-    assert {c["model"] for c in llm.calls if c["task"].startswith("panel ")} >= {"claude-haiku-5-5", "claude-sonnet-5-5"}
-    assert len(state["review"]["candidates"]) == 2 and "opening scene" in tasks
-    assert next(c for c in llm.calls if c["task"] == "panel final pick")["images"] == 2
-    pitch = llm.calls[0]["prompt"]
-    assert (
-        "Pitch exactly 6" in pitch
-        and "at least two concepts are open visual metaphors" in pitch
-        and "plinko" in llm.calls[0]["system"][0].text
-    )
-
-
 async def test_a_pitch_missing_the_open_styles_is_sent_back_once(monkeypatch: pytest.MonkeyPatch) -> None:
     llm = FakeLLM()
     room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
@@ -289,29 +263,6 @@ class NoEyesLLM(FakeLLM):
         if kwargs.get("images"):
             raise LLMImagesUnsupportedError()
         return await super().structured(task=task, schema=schema, **kwargs)
-
-
-async def test_the_render_review_is_skipped_without_image_input_and_a_failure_is_redrawn_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    llm = NoEyesLLM()
-    room = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
-    state = load_state((await room.make("", context(), ART)).spec)
-    assert state and state["review"]["skipped"] is True
-
-    picky = FakeLLM()
-    room = OpeningRoom(picky, Settings(), MemeMaker(picky, Settings()))
-    original = picky.structured
-
-    async def strict(**kwargs: Any) -> Any:
-        if kwargs["schema"] is FinalPick:
-            await original(**kwargs)
-            return FinalPick(chosen=0, fix="Use fewer, larger tiles.", why="Clearest at a glance.")
-        return await original(**kwargs)
-
-    monkeypatch.setattr(picky, "structured", strict)
-    state = load_state((await room.make("", context(), ART)).spec)
-    builds = [c for c in picky.calls if c["task"] == "opening cheat_grid build"]
-    assert len(builds) == 2 and "Use fewer, larger tiles." in builds[1]["prompt"]
-    assert state and state["review"]["verdict"] == "redrawn"
 
 
 async def test_a_visual_metaphor_is_staged_from_the_kit_in_a_house_scheme() -> None:

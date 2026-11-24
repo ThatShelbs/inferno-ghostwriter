@@ -45,3 +45,6 @@ Thumbs.db
 
 # Local preview config for Claude Code (machine-specific paths)
 .claude/launch.json
+
+# Local reference images (third-party memes and art, never committed; see docs/images.md)
+examples/

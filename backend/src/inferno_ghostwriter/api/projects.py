@@ -12,6 +12,7 @@ from sqlmodel import Session, col, select
 from inferno_ghostwriter.abtest.service import ABTestError, current_test, delete_project_data, start_ab_test
 from inferno_ghostwriter.api.deps import ServicesDep, SessionDep, image_or_404, persona_or_404, project_or_404
 from inferno_ghostwriter.api.evolution import evolution_out
+from inferno_ghostwriter.api.image_room import image_formats, image_out, image_url, room_info
 from inferno_ghostwriter.api.schemas import (
     ABTestSummary,
     AddImageIn,
@@ -19,43 +20,31 @@ from inferno_ghostwriter.api.schemas import (
     CopyHtmlOut,
     GenerateIn,
     ImageEditIn,
-    ImageHistoryOut,
+    ImageFormatOut,
     ImageOut,
     ImageUpdate,
     InterviewAnswer,
     InterviewIn,
     JobOut,
     LinkedInPostOut,
-    MemeFormatOut,
-    MemeInfoOut,
-    MemeLookOut,
-    MemePitchOut,
-    MemeSlotOut,
-    MemeWordsIn,
     OpeningCatalogOut,
-    OpeningInfoOut,
-    OpeningPitchOut,
-    OpeningReviewOut,
-    OpeningSourceOut,
     OpeningStyleOut,
-    OpeningWordsIn,
+    PickIn,
     ProjectCreate,
     ProjectCreated,
     ProjectOut,
     ProjectSummary,
     ProjectUpdate,
-    RatingIn,
     RedrawIn,
     ReferenceHistoryOut,
     ReferenceOut,
     RemixDimensionOut,
     RemixOptionOut,
-    RemixOut,
-    RemixTweakOut,
     RevertIn,
     RevisionOut,
     RewriteIn,
     TweakIn,
+    WordsIn,
 )
 from inferno_ghostwriter.authenticity import analyze, author_profile
 from inferno_ghostwriter.db import Idea, Persona, PersonaEvolution, Project, ProjectImage, ProjectReference, Sample, utcnow
@@ -63,17 +52,7 @@ from inferno_ghostwriter.evolution import change_stage, edit_rate, start_analysi
 from inferno_ghostwriter.export import PLATFORMS, Platform, build_bundle, copy_html, linkedin_post
 from inferno_ghostwriter.images import ImageProviderError, to_png
 from inferno_ghostwriter.images import remix as remixing
-from inferno_ghostwriter.images.memes import FAMILIES, FORMATS, get_format, load_state
-from inferno_ghostwriter.images.memes.generate import panel_scores
-from inferno_ghostwriter.images.memes.looks import LOOKS, get_look, is_look
-from inferno_ghostwriter.images.opening.room import JUDGES, fit_of, sources_of
-from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
-from inferno_ghostwriter.images.opening.room import ruled_out as opening_ruled_out
-from inferno_ghostwriter.images.opening.room import total as opening_total
-from inferno_ghostwriter.images.opening.specs import OpeningBuild
-from inferno_ghostwriter.images.opening.styles import STYLES, get_style, suggested_by_type
-from inferno_ghostwriter.images.opening.templates import get_template, slot_texts
-from inferno_ghostwriter.images.service import is_meme, meme_spec, remix_dimensions
+from inferno_ghostwriter.images.opening.styles import STYLES, suggested_by_type
 from inferno_ghostwriter.jobs import JobContext
 from inferno_ghostwriter.llm import LLMError
 from inferno_ghostwriter.services import Services
@@ -109,170 +88,6 @@ MAX_IMAGE_BYTES = 15 * 1024 * 1024
 
 
 # -- helpers ---------------------------------------------------------------------------
-
-
-def image_url(image: ProjectImage) -> str | None:
-    if not image.file_name:
-        return None
-    return f"/api/images/{image.id}/file?v={image.file_name}"
-
-
-def image_out(image: ProjectImage) -> ImageOut:
-    history = [
-        ImageHistoryOut(
-            index=i,
-            url=f"/api/images/{image.id}/history/{i}/file",
-            provider=str(entry.get("provider", "")),
-            caption=str(entry.get("caption", "")),
-            created_at=str(entry.get("created_at", "")),
-        )
-        for i, entry in enumerate(image.history)
-    ]
-    return ImageOut(
-        **image.model_dump(exclude={"history", "spec", "file_name", "project_id", "anchor", "remix"}),
-        url=image_url(image),
-        history=history,
-        meme=meme_info(image),
-        opening=opening_info(image),
-        remix=remix_info(image),
-        remix_dimensions=list(remix_dimensions(image)),
-    )
-
-
-def remix_info(image: ProjectImage) -> RemixOut | None:
-    state = image.remix or {}
-    if not state.get("tweaks") and not state.get("brainstormed"):
-        return None
-    return RemixOut(
-        weakness=str(state.get("weakness") or ""),
-        improvements=[str(i) for i in state.get("improvements") or []],
-        fresh_angle=str(state.get("fresh_angle") or ""),
-        tweaks=[
-            RemixTweakOut(dimension=str(t.get("dimension", "")), id=str(t.get("id", "")), label=str(t.get("label", "")))
-            for t in state.get("tweaks") or []
-        ],
-        brainstormed=bool(state.get("brainstormed")),
-    )
-
-
-def opening_info(image: ProjectImage) -> OpeningInfoOut | None:
-    state = load_opening_state(image.spec) if image.kind == "hero" else None
-    if state is None:
-        return None
-    entries = state.get("concepts") or []
-    chosen, tried = state.get("chosen"), set(state.get("tried") or [])
-    pitches = []
-    for i, entry in enumerate(entries):
-        style = get_style(str(entry.get("style", "")))
-        if style is None:
-            continue
-        panel = entry.get("panel") or {}
-        pitches.append(
-            OpeningPitchOut(
-                index=i,
-                style=style.id,
-                style_label=style.label,
-                template=str(entry.get("template") or ""),
-                hook=str(entry.get("hook") or ""),
-                concept=str(entry.get("concept") or ""),
-                scores={str(k): int(v) for k, v in (panel.get("seats") or {j: panel.get(j, 0) for j in JUDGES}).items()},
-                note=str(panel.get("note") or ""),
-                total=opening_total(entry)[0],
-                ruled_out=opening_ruled_out(entry),
-                tried=i in tried,
-                current=i == chosen,
-            )
-        )
-    style = get_style(str(state.get("style") or ""))
-    template = get_template(str(state.get("template") or ""))
-    slots: list[MemeSlotOut] = []
-    if template is not None and state.get("build"):
-        build = OpeningBuild.model_validate(state["build"])
-        slots = [
-            MemeSlotOut(name=name, hint=hint, text=text, max_chars=limit, optional=name != "headline")
-            for name, hint, text, limit in slot_texts(template, build)
-        ]
-    review = state.get("review") or None
-    failed = get_style(str(state.get("fallback_from") or ""))
-    return OpeningInfoOut(
-        style=style.id if style else "",
-        style_label=style.label if style else "",
-        template=template.id if template else "",
-        mode=str(state.get("mode") or "auto"),
-        summary=str(state.get("summary") or ""),
-        ideas_left=sum(1 for p in pitches if not p.tried and not p.ruled_out),
-        fallback_from=failed.label if failed else "",
-        pitches=pitches,
-        sources=[OpeningSourceOut(**s) for s in sources_of(state)],
-        review=review_out(review),
-        slots=slots,
-        thumbnail_fit=fit_of(state),
-    )
-
-
-def review_out(review: dict[str, Any] | None) -> OpeningReviewOut | None:
-    """The render review as the image panel shows it (the seat panel, or an older single-image review)."""
-    if not review:
-        return None
-    if review.get("skipped"):
-        return OpeningReviewOut(verdict="skipped", note=str(review.get("note", "")))
-    out = OpeningReviewOut(**{k: review[k] for k in ("verdict", "clickability", "craft", "problems") if k in review})
-    panel = review.get("panel") or {}
-    candidates = review.get("candidates") or []
-    readings = panel.get("readings") or []
-    winner = int(review.get("winner") or 0)
-    out.why = str(review.get("why") or "")
-    out.fix = str(review.get("fix") or "")
-    out.readings = [str(r) for r in (readings[winner] if 0 <= winner < len(readings) and candidates else [])][:2]
-    return out
-
-
-def meme_info(image: ProjectImage) -> MemeInfoOut | None:
-    state = load_state(meme_spec(image)) if is_meme(image) else None
-    if state is None:
-        return None
-    concepts = state.get("concepts") or []
-    chosen = state.get("chosen")
-    fmt = get_format(str(state.get("format", "")))
-    premise = concepts[chosen].get("premise", "") if isinstance(chosen, int) and 0 <= chosen < len(concepts) else ""
-    tried = set(state.get("tried") or [])
-    panel = panel_scores(state, len(concepts))
-    pitches = [
-        MemePitchOut(
-            index=i,
-            format=pitch_fmt.id,
-            format_name=pitch_fmt.name,
-            premise=str(c.get("premise", "")),
-            words=[str(t.get("text", "")).strip() for t in c.get("texts") or [] if str(t.get("text", "")).strip()],
-            tried=i in tried,
-            current=i == chosen,
-            panel_score=panel[i] if panel else None,
-        )
-        for i, c in enumerate(concepts)
-        if (pitch_fmt := get_format(str(c.get("format", ""))))
-    ]
-    words = {str(t.get("slot")): str(t.get("text", "")) for t in (state.get("build") or {}).get("texts") or []}
-    slots = [
-        MemeSlotOut(name=s.name, hint=s.hint, text=words.get(s.name, ""), max_chars=s.max_chars, optional=s.optional)
-        for s in (fmt.slots if fmt and state.get("build") else ())
-    ]
-    failed = get_format(str(state.get("fallback_from", "")))
-    look = get_look(state.get("look"))
-    return MemeInfoOut(
-        format=fmt.id if fmt else "",
-        format_name=fmt.name if fmt else "",
-        premise=premise,
-        ideas_left=sum(1 for p in pitches if not p.tried),
-        has_art=bool(fmt and fmt.regions),
-        fallback_from=failed.name if failed else "",
-        pitches=pitches,
-        slots=slots,
-        look=look.id,
-        look_label=look.label,
-        review_verdict=str((state.get("review") or {}).get("verdict") or ("skipped" if (state.get("review") or {}).get("skipped") else "")),
-        review_why=(review_out(state.get("review")) or OpeningReviewOut(verdict="")).why,
-        review_readings=(review_out(state.get("review")) or OpeningReviewOut(verdict="")).readings,
-    )
 
 
 def reference_out(row: ProjectReference, markdown: str) -> ReferenceOut:
@@ -761,11 +576,9 @@ async def _image_job(
     *,
     rethink: bool = False,
     instruction: str = "",
-    meme_format: str | None = None,
-    meme_concept: int | None = None,
-    meme_look: str | None = None,
-    opening_style: str | None = None,
-    opening_concept: int | None = None,
+    concept: int | None = None,
+    format: str | None = None,
+    note: str = "",
     tweaks: dict[str, str] | None = None,
     improve: bool = True,
 ) -> JobOut:
@@ -790,11 +603,9 @@ async def _image_job(
             rethink=rethink,
             brand_kit=brand_kit,
             instruction=instruction,
-            meme_format=meme_format,
-            meme_concept=meme_concept,
-            meme_look=meme_look,
-            opening_style=opening_style,
-            opening_concept=opening_concept,
+            concept=concept,
+            format=format,
+            note=note,
             tweaks=tweaks,
             improve=improve,
             usage=ctx.add_usage,
@@ -816,46 +627,62 @@ async def _image_job(
 async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, services: ServicesDep) -> JobOut:
     """Make a new version of one image (redesign it with ``rethink``).
 
-    Memes (closing or opening) can switch format with ``meme_format`` or to one of their stored pitches with
-    ``meme_concept``. The opening image can pitch again in one style with ``opening_style`` or build one of the
-    panel's stored pitches with ``opening_concept``."""
+    Every image has the same tools: ``concept`` draws one of its stored ideas, ``format`` pitches again in a meme
+    format, an opening style or another way to draw it (the whole meme bank is open to the opening image), and
+    ``note`` steers the redraw in the author's words."""
     image = image_or_404(session, image_id)
     for dimension, tweak_id in (body.tweaks or {}).items():
         if dimension not in remixing.DIMENSIONS or (tweak_id != "auto" and remixing.get_tweak(dimension, tweak_id) is None):
             raise HTTPException(422, f"Unknown tweak {dimension}={tweak_id!r}.")
-    # The whole meme bank is open to the opening image too: a format on a non-meme opener makes it a meme.
-    if body.meme_format is not None and image.kind == "hero" and not is_meme(image):
-        if not get_format(body.meme_format):
-            raise HTTPException(422, f"Unknown meme format {body.meme_format!r}.")
-    elif body.meme_format is not None or body.meme_concept is not None or body.meme_look is not None:
-        if not is_meme(image):
-            raise HTTPException(422, "Only memes have formats and pitches.")
-        if body.meme_format is not None and not get_format(body.meme_format):
-            raise HTTPException(422, f"Unknown meme format {body.meme_format!r}.")
-        if body.meme_look is not None and not is_look(body.meme_look):
-            raise HTTPException(422, f"Unknown meme look {body.meme_look!r}.")
-        if body.meme_concept is not None and body.meme_concept >= len((load_state(meme_spec(image)) or {}).get("concepts") or []):
-            raise HTTPException(422, "This meme has no such pitch.")
-    if body.opening_style is not None or body.opening_concept is not None:
-        if image.kind != "hero":
-            raise HTTPException(422, "Only the opening image has opening styles and pitches.")
-        if body.opening_style is not None and not get_style(body.opening_style):
-            raise HTTPException(422, f"Unknown opening style {body.opening_style!r}.")
-        if body.opening_concept is not None and body.opening_concept >= len((load_opening_state(image.spec) or {}).get("concepts") or []):
-            raise HTTPException(422, "This opening image has no such pitch.")
+    room = room_info(image)
+    if body.format is not None:
+        allowed = {f.id for f in image_formats(room.room if room else _room_kind(image), image.kind)}
+        if body.format not in allowed:
+            raise HTTPException(422, f"This image cannot be drawn as {body.format!r}.")
+    if body.concept is not None and (room is None or body.concept not in {p.index for p in room.pitches}):
+        raise HTTPException(422, "This image has no such idea.")
     return await _image_job(
         services,
         session,
         image_id,
         rethink=body.rethink,
-        meme_format=body.meme_format,
-        meme_concept=body.meme_concept,
-        meme_look=body.meme_look,
-        opening_style=body.opening_style,
-        opening_concept=body.opening_concept,
+        concept=body.concept,
+        format=body.format,
+        note=body.note,
         tweaks=body.tweaks,
         improve=body.improve,
     )
+
+
+def _room_kind(image: ProjectImage) -> str:
+    return {"hero": "opening", "meme": "meme"}.get(image.kind, "body")
+
+
+@router.post("/images/{image_id}/pick", response_model=ImageOut)
+def pick_finalist(image_id: int, body: PickIn, session: SessionDep, services: ServicesDep) -> ImageOut:
+    """Show another finalist of the image's last fresh run (no call to Claude)."""
+    image_or_404(session, image_id)
+    try:
+        return image_out(services.images.pick(image_id, body.index))
+    except IndexError as exc:
+        raise HTTPException(404, "No such finalist.") from exc
+
+
+@router.get("/images/{image_id}/finalists/{index}/file")
+def finalist_file(image_id: int, index: int, session: SessionDep, services: ServicesDep) -> FileResponse:
+    image = image_or_404(session, image_id)
+    finalists = image.finalists or []
+    if not 0 <= index < len(finalists):
+        raise HTTPException(404, "No such finalist.")
+    return _image_file(services, image, finalists[index].get("file_name"))
+
+
+@router.get("/image-formats", response_model=list[ImageFormatOut])
+def list_image_formats(room: str = "meme", kind: str = "") -> list[ImageFormatOut]:
+    """What an image's room can switch to: ``room`` is opening, meme or body (with the image's ``kind``)."""
+    if room not in ("opening", "meme", "body"):
+        raise HTTPException(422, "room is one of opening, meme, body.")
+    return image_formats(room, kind)
 
 
 def dependent_slots(services: Services, project_id: int, slot_id: str) -> list[str]:
@@ -952,15 +779,15 @@ def remix_options() -> list[RemixDimensionOut]:
     ]
 
 
-@router.put("/images/{image_id}/opening-words", response_model=ImageOut)
-def set_opening_words(image_id: int, body: OpeningWordsIn, session: SessionDep, services: ServicesDep) -> ImageOut:
-    """Retype the words of a code-drawn opening image (cheat sheet, versus, big number, framework, chart).
-    It is laid out again at once with no call to Claude; numbers and sources cannot be changed this way."""
+@router.put("/images/{image_id}/words", response_model=ImageOut)
+def set_words(image_id: int, body: WordsIn, session: SessionDep, services: ServicesDep) -> ImageOut:
+    """Retype the words of a meme or a code-drawn opening image (see ``ImageOut.room.slots``). It is drawn again at
+    once with no call to Claude; numbers and sources cannot be changed this way."""
     image = image_or_404(session, image_id)
     project = project_or_404(session, image.project_id)
     persona = persona_or_404(session, project.persona_id)
     try:
-        return image_out(services.images.set_opening_words(image_id, body.words, persona=persona, brand_kit=dict(project.brand_kit or {})))
+        return image_out(services.images.set_words(image_id, body.words, persona=persona, brand_kit=dict(project.brand_kit or {})))
     except ImageProviderError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -979,39 +806,6 @@ def opening_styles() -> OpeningCatalogOut:
         ],
         suggested_by_type=suggested_by_type([t.id for t in ARTICLE_TYPES]),
     )
-
-
-@router.put("/images/{image_id}/rating", response_model=ImageOut)
-def rate_image(image_id: int, body: RatingIn, session: SessionDep, services: ServicesDep) -> ImageOut:
-    """Thumbs up (1), down (-1) or clear (0) on an image. Ratings on opening images and memes teach the persona's taste."""
-    image_or_404(session, image_id)
-    return image_out(services.images.rate(image_id, body.rating))
-
-
-@router.put("/images/{image_id}/meme-words", response_model=ImageOut)
-def set_meme_words(image_id: int, body: MemeWordsIn, session: SessionDep, services: ServicesDep) -> ImageOut:
-    """Retype a meme's words. The meme is drawn again at once, with the same art and no call to Claude."""
-    image = image_or_404(session, image_id)
-    project = project_or_404(session, image.project_id)
-    persona = persona_or_404(session, project.persona_id)
-    try:
-        return image_out(services.images.set_meme_words(image_id, body.words, persona=persona, brand_kit=dict(project.brand_kit or {})))
-    except ImageProviderError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@router.get("/meme-looks", response_model=list[MemeLookOut])
-def meme_looks() -> list[MemeLookOut]:
-    """Every look a meme can be drawn in (the Look menu); swatches are the look's own palette, dark to light."""
-    return [MemeLookOut(id=look.id, label=look.label, description=look.description, swatch=list(look.theme.accents[:5])) for look in LOOKS]
-
-
-@router.get("/meme-formats", response_model=list[MemeFormatOut])
-def meme_formats() -> list[MemeFormatOut]:
-    """Every format a closing meme can take, in menu order."""
-    return [
-        MemeFormatOut(id=f.id, name=f.name, family=f.family, family_label=FAMILIES[f.family], when_to_use=f.when_to_use) for f in FORMATS
-    ]
 
 
 @router.post("/projects/{project_id}/images/redraw", response_model=JobOut, status_code=202)

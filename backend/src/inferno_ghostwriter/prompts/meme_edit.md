@@ -5,7 +5,6 @@ $instruction
 </instruction>
 
 $brand
-$look
 
 <format_spec>
 $spec
@@ -16,4 +15,4 @@ The current meme, as you built it:
 $current
 </current>
 
-Return the complete edited build (every text slot, `cast_defs`, every art region, `data`), copying unchanged parts verbatim. Update the alt text if the words or the picture change, and the caption only if the edit changes what it describes.
+Return the complete edited build (every text slot, `data`, `cast` and `panels`; leave `art` empty and `cast_defs` blank: code draws the picture), copying unchanged parts verbatim. Update the alt text if the words or the picture change, and the caption only if the edit changes what it describes.

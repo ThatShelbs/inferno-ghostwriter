@@ -2,16 +2,16 @@
 
 1. **Pitch** (``OpeningIdeas``): six concepts across the styles that suit the post (four in one style when the author
    chose it). On Auto at least two are open visual metaphors and one is data art, so imaginative ideas always compete.
-2. **Panel** (``images/panel.py``): independent seats on Haiku, Sonnet and Opus (scroller, cold reader, art
-   director, fact checker, author) score every concept at once. Code adds the votes; vetoes rule a concept out.
+2. **Rank** (``judge.rank_pitches``): one judge call scores every concept (story fit, clarity, surprise) and may
+   veto one; a concept whose ``anchor`` quote is not in the post ranks last.
 3. **Research** (data styles only): the winning claim's numbers are looked up with web search.
 4. **Build**: a kit-staged scene (visual metaphor: kit characters and props plus one custom object Claude draws,
    ``scene.py``), Claude SVG (data art, receipt; linted and snapped to the scheme), a code template (cheat sheet,
    versus, big number, framework, chart) or the meme room. Every number a data opener prints must pass ``facts.check``.
-   A fresh opener builds its two best concepts at once.
-5. **Render panel**: blind readers see only the pictures and say what they mean (matched against each concept's
-   ``reader_takeaway``), a craft and an appeal seat look closely, and a final pick on Opus chooses between the feed
-   cards and may ask for one fix. Connections that cannot show Claude an image skip this step.
+   A fresh opener builds its best ``image_candidates`` concepts at once.
+5. **Judge the pictures** (``judge.judge_sheet``): one vision call sees every candidate next to the author's
+   reference images, says what each reads as, scores it and names one fix. The best ``image_finalists`` are rebuilt
+   with their fix and offered to the author. Connections that cannot show Claude an image keep the pitch order.
 
 Colors come from a ``Scheme`` (inferno, magma or viridis on white, gray or near-black; a brand palette wins), stored
 on the image and rotated against the author's recent images.
@@ -26,19 +26,20 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images.base import ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker, MemeResult
 from inferno_ghostwriter.images.memes.generate import clip_post
 from inferno_ghostwriter.images.memes.generate import load_state as load_meme_state
 from inferno_ghostwriter.images.opening import facts, templates
 from inferno_ghostwriter.images.opening.canvas import SAFE_BOTTOM, SAFE_TOP
-from inferno_ghostwriter.images.opening.feedcard import feed_card
 from inferno_ghostwriter.images.opening.scene import compose_scene, scene_menu
 from inferno_ghostwriter.images.opening.specs import (
     OpeningBuild,
@@ -49,10 +50,11 @@ from inferno_ghostwriter.images.opening.specs import (
 from inferno_ghostwriter.images.opening.styles import AUTO, BY_ID, FALLBACK, STYLES, OpeningStyle, get_style
 from inferno_ghostwriter.images.palettes import DARK_SURFACES, LIGHT_SURFACES, Scheme, brand_scheme, from_id, house_ramp, scheme
 from inferno_ghostwriter.images.palettes import pick as pick_colors
-from inferno_ghostwriter.images.panel import PanelResult, convene, final_pick, parse_seats
+from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
 from inferno_ghostwriter.images.remix import dimensions_for, edit_note, variation_for
 from inferno_ghostwriter.images.render import svg_to_png
 from inferno_ghostwriter.images.specs import SvgSpec
+from inferno_ghostwriter.images.story import anchored, deal
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import Citation, LLMRefusalError, ResearchResult, UsageSink
 from inferno_ghostwriter.prompts import raw, render
@@ -141,19 +143,12 @@ class OpeningContext:
     meme_context: MemeContext | None = None
     # Color schemes ("ramp:surface") the author's latest images used, newest first.
     recent_schemes: tuple[str, ...] = ()
-    # The author's taste from their thumbs (images/taste.py), as a prompt note; "" when unknown.
-    taste: str = ""
+    # Seeds the angle cards; a new one each run keeps pitches fresh.
+    seed: int | None = None
 
 
-@dataclass
-class OpeningResult:
-    png: bytes
-    width: int
-    height: int
-    provider: str
-    spec: str
-    alt: str
-    caption: str
+# The opening room returns the shared result type.
+OpeningResult = Drawn
 
 
 @dataclass
@@ -259,6 +254,7 @@ class OpeningRoom:
         self.settings = settings
         self.memes = memes
         self.system = [SystemBlock(raw("opening_system"), cache=True)]
+        self.references = ReferenceLibrary(settings.image_reference_dir)
 
     # -- public ------------------------------------------------------------------------
 
@@ -329,12 +325,14 @@ class OpeningRoom:
         state["scheme"] = sch.id
         first_style = state["concepts"][order[0]]["style"] if order else FALLBACK
         built: _Built | None = None
-        fresh = not (redraw or rethink or concept_index is not None or meme_format is not None or style)
-        if fresh and len(order) > 1 and self.settings.image_render_candidates > 1:
-            # A fresh opener builds its best concepts at once and lets the render panel choose between the pictures.
+        finalists: list[Drawn] = []
+        # A fresh pitch (a new image, new pitches, another style) builds its best concepts at once and lets the judge
+        # choose between the pictures; the best few become finalists.
+        fresh = bool(state.pop("_fresh", False)) and concept_index is None and meme_format is None
+        if fresh and len(order) > 1 and self.settings.image_candidates > 1:
             chosen_build = await self._build_and_choose(state, order, ctx, art, sch, tried, usage)
             if chosen_build is not None:
-                i, built = chosen_build
+                i, built, finalists = chosen_build
                 state["chosen"] = i
                 # The panel preferred this concept; nothing failed, so it is not a stand-in.
                 first_style = str(state["concepts"][i].get("style") or first_style)
@@ -378,7 +376,9 @@ class OpeningRoom:
         if built.state.get("style", FALLBACK) != first_style:
             state["fallback_from"] = first_style
         state["tried"] = sorted(tried)
-        return self._finish(state, built)
+        result = self._finish(state, built)
+        result.finalists = finalists
+        return result
 
     async def _build_and_choose(
         self,
@@ -389,10 +389,11 @@ class OpeningRoom:
         sch: Scheme,
         tried: set[int],
         usage: UsageSink | None,
-    ) -> tuple[int, _Built] | None:
-        """Build the best concepts at once, then let the render panel and the final pick choose; None if none built."""
-        count = max(2, self.settings.image_render_candidates)
-        # The best concepts, at most one of them a meme (each meme is a whole writers' room of its own).
+    ) -> tuple[int, _Built, list[Drawn]] | None:
+        """Build the best concepts at once, let the judge look at the pictures, refine the best and keep them as
+        finalists; None if none could be built."""
+        count = max(2, self.settings.image_candidates)
+        # The best concepts, at most one of them a meme (each meme is a whole room of its own).
         picks: list[int] = []
         for i in [i for i in order if not ruled_out(state["concepts"][i])] or order:
             is_meme = state["concepts"][i].get("style") == "meme"
@@ -402,69 +403,89 @@ class OpeningRoom:
             if len(picks) >= count:
                 break
         concepts = load_concepts(state)
-        scratch = [dict(state) for _ in picks]
+        scratch = [json.loads(json.dumps(state)) for _ in picks]
         results = await asyncio.gather(
             *(self._build(concepts[i], scratch[k], ctx, art, sch, redraw=False, usage=usage) for k, i in enumerate(picks))
         )
         tried.update(picks)
-        state["tried_parallel"] = list(picks)
-        options = [(i, b, scratch[k]) for k, (i, b) in enumerate(zip(picks, results, strict=True)) if b is not None]
+        options: list[list[Any]] = [[i, b, scratch[k]] for k, (i, b) in enumerate(zip(picks, results, strict=True)) if b is not None]
         if not options:
             return None
-        chosen = 0
-        review: dict[str, Any] = {"verdict": "passed", "candidates": [o[0] for o in options]}
-        seats = parse_seats(self.settings.image_panel_render)
-        if seats:
-            pngs = [thumbnail_png(o[1].png) for o in options]
-            cards = [feed_card(o[1].png, ctx.title) for o in options]
-            labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
-            intents = [concepts[o[0]].reader_takeaway or concepts[o[0]].concept for o in options]
-            panel = await convene(
-                self.llm, seats, context=self._panel_context(ctx), candidates=labels, images=pngs, intents=intents, usage=usage
-            )
-            if panel.answered:
-                pick = await final_pick(
-                    self.llm,
-                    context=self._panel_context(ctx),
-                    candidates=labels,
-                    images=cards,
-                    panel=panel,
-                    spec=self.settings.image_panel_final,
-                    usage=usage,
+        keep = max(1, self.settings.image_finalists)
+        labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
+        refs, note = self._references([concepts[o[0]].style for o in options], [o[2] for o in options])
+        sheet = await judge_sheet(
+            self.llm,
+            self.settings,
+            context=self._panel_context(ctx),
+            candidates=[
+                f"{label}\n   Meant to say: {concepts[o[0]].reader_takeaway or concepts[o[0]].concept}"
+                for label, o in zip(labels, options, strict=True)
+            ],
+            pngs=[thumbnail_png(o[1].png) for o in options],
+            references=refs,
+            reference_note=note,
+            usage=usage,
+        )
+        review: dict[str, Any]
+        if sheet is not None:
+            ranked = sheet.order()[:keep]
+            review = {"why": sheet.why, "candidates": [o[0] for o in options]}
+            for k, o in enumerate(options):
+                state["concepts"][o[0]]["reads_as"] = sheet.reads_as[k]
+
+            async def refine(k: int) -> None:
+                i, current, scratch_state = options[k]
+                fix_text = sheet.fixes[k]
+                if not fix_text or concepts[i].style == "meme":  # a meme would need its own room to change
+                    return
+                fix = (
+                    "\nThe judge looked at the finished picture and asked for one change; keep everything else exactly as it "
+                    f"is:\n<instruction>\n{fix_text}\n</instruction>\n" + self._current_note(current.state)
                 )
-                order_ = panel.ranking()
-                vetoed_all = len(panel.vetoed) == len(options)
-                chosen = pick.chosen if pick is not None and (pick.chosen not in panel.vetoed or vetoed_all) else order_[0]
-                review = {
-                    "verdict": "passed",
-                    "panel": panel.summary(),
-                    "why": pick.why if pick else "",
-                    "fix": pick.fix if pick else "",
-                    "candidates": [o[0] for o in options],
-                }
-                fixable = concepts[options[chosen][0]].style != "meme"  # a meme would need its own room to change
-                if pick is not None and pick.fix.strip() and pick.chosen == chosen and fixable:
-                    i, current, scratch_state = options[chosen]
-                    fix = (
-                        "\nThe art director looked at the finished picture and asked for one change; keep everything else "
-                        f"exactly as it is:\n<instruction>\n{pick.fix.strip()}\n</instruction>\n" + self._current_note(current.state)
-                    )
-                    again = await self._build(
-                        concepts[i], scratch_state, ctx, art, sch, redraw=False, usage=usage, fix=fix, keep_research=True
-                    )
-                    if again is not None:
-                        options[chosen] = (i, again, scratch_state)
-                        review["verdict"] = "redrawn"
-            else:
-                review = {"skipped": True, "note": "This connection cannot show Claude the image, so it was not reviewed."}
-        i, built, scratch_state = options[chosen]
-        state.pop("tried_parallel", None)
-        review["winner"] = chosen
+                again = await self._build(concepts[i], scratch_state, ctx, art, sch, redraw=False, usage=usage, fix=fix, keep_research=True)
+                if again is not None:
+                    options[k][1] = again
+
+            await asyncio.gather(*(refine(k) for k in ranked))
+        else:
+            ranked = list(range(min(keep, len(options))))
+            review = {"skipped": True, "note": "Ranked from the pitches (this connection cannot show Claude pictures)."}
+        state["review"] = review
+        finalists: list[Drawn] = []
+        for k in ranked:
+            i, built, scratch_state = options[k]
+            snapshot = json.loads(json.dumps(state))
+            for key in ("research", "post_numbers"):
+                if key in scratch_state:
+                    snapshot[key] = scratch_state[key]
+            snapshot["chosen"] = i
+            drawn = self._finish(snapshot, built)
+            drawn.label = labels[k]
+            drawn.score = round(sheet.scores[k], 2) if sheet is not None else None
+            drawn.reads_as = sheet.reads_as[k] if sheet is not None else ""
+            finalists.append(drawn)
+        i, built, scratch_state = options[ranked[0]]
         for key in ("research", "post_numbers"):
             if key in scratch_state:
                 state[key] = scratch_state[key]
-        state["review"] = review
-        return i, built
+        return i, built, finalists if len(finalists) > 1 else []
+
+    def _references(self, styles: list[str], states: list[dict[str, Any]]) -> tuple[list[bytes], str]:
+        """The author's reference images for the styles in the running (the original meme for a meme)."""
+        paths = []
+        for style, st in zip(styles, states, strict=True):
+            if style == "meme":
+                inner = load_meme_state(str(st.get("meme") or "")) or {}
+                found = self.references.for_meme(str(inner.get("format") or ""))
+                if found:
+                    paths.append(found)
+            elif style == "data_art":
+                paths += self.references.for_category("data_art", 2)
+            else:
+                paths += self.references.for_category("diagram", 1)
+        unique = list(dict.fromkeys(paths))[:4]
+        return (load_png(unique, 512), "the author's examples of the quality and style to aim for") if unique else ([], "")
 
     @staticmethod
     def _current_note(built_state: dict[str, Any]) -> str:
@@ -601,7 +622,11 @@ class OpeningRoom:
                 if recent and not fixed
                 else ""
             )
-            + (f"\n{ctx.taste}\n" if ctx.taste else ""),
+            + (
+                ""
+                if fixed
+                else "\n" + deal(ctx.markdown, seed=ctx.seed if ctx.seed is not None else random.randrange(1 << 30), humor=ctx.humor) + "\n"
+            ),
             exclude=("\nThese ideas were already used; pitch different ones:\n" + "\n".join(f"- {e}" for e in exclude) + "\n")
             if exclude
             else "",
@@ -637,8 +662,11 @@ class OpeningRoom:
         if not concepts:
             raise ImageProviderError("Claude did not pitch any opening ideas. Click New idea to try again.")
         entries = [c.model_dump() for c in concepts]
+        for entry, concept in zip(entries, concepts, strict=True):
+            entry["anchored"] = anchored(concept.anchor, ctx.markdown)
         summary = await self._judge(ctx, concepts, entries, usage)
         return {
+            "_fresh": True,
             "version": STATE_VERSION,
             "room": "opening",
             "brief": ctx.brief,
@@ -683,28 +711,23 @@ class OpeningRoom:
     async def _judge(
         self, ctx: OpeningContext, concepts: list[OpeningConcept], entries: list[dict[str, Any]], usage: UsageSink | None
     ) -> str:
-        """The independent pitch panel (images/panel.py); without enough seats the pitch order stands."""
-        seats = parse_seats(self.settings.image_panel_opening)
-        result: PanelResult | None = None
-        if seats:
-            result = await convene(
-                self.llm, seats, context=self._panel_context(ctx), candidates=[_concept_text(c) for c in concepts], usage=usage
-            )
-        if result is None or not result.ok:
-            # Without a verdict the concepts keep the order they were pitched in (the pitcher put its best first).
-            log.info("Opening panel: too few seats answered; using pitch order")
-            for i, entry in enumerate(entries):
-                entry["panel"] = {"total": max(1, 6 - i), "vetoed": False, "note": "Not judged (the panel did not answer)."}
-            return ""
+        """One judge call ranks the concepts; without an answer the pitch order stands. Unanchored concepts rank last."""
+        result = await rank_pitches(
+            self.llm, self.settings, context=self._panel_context(ctx), candidates=[_concept_text(c) for c in concepts], usage=usage
+        )
         for i, entry in enumerate(entries):
-            entry["panel"] = {
-                "total": round(result.totals[i] + (100 if i in result.vetoed else 0), 2),
-                "vetoed": i in result.vetoed,
-                "note": " | ".join(result.notes[i][:3]),
-                "seats": {k: v[i] for k, v in result.seats.items()},
-            }
+            if result is None:
+                entry["panel"] = {"total": max(1, 6 - i), "vetoed": False, "note": "Not judged (the judge did not answer)."}
+            else:
+                entry["panel"] = result.entry(i)
+            if not entry.get("anchored", True):
+                entry["panel"]["vetoed"] = True
+                entry["panel"]["note"] = ("Its quote is not in the post. " + str(entry["panel"].get("note") or "")).strip()
+        if result is None:
+            log.info("Opening judge did not answer; using pitch order")
+            return ""
         best = result.best()
-        return result.notes[best][0].split(": ", 1)[-1] if best is not None and result.notes[best] else ""
+        return result.notes[best] if best is not None else ""
 
     # -- building ------------------------------------------------------------------------
 
@@ -1009,7 +1032,7 @@ class OpeningRoom:
             title=ctx.title, markdown=ctx.markdown, voice_profile=ctx.voice_profile, brief="", humor=ctx.humor
         )
         meme_ctx = replace(base, brief=f"{concept.concept} ({concept.hook})", position="opening", opening="", joke="")
-        meme = await self.memes.make(previous, meme_ctx, art, redraw=bool(previous), meme_format=meme_format, review=False, usage=usage)
+        meme = await self.memes.make(previous, meme_ctx, art, redraw=bool(previous), meme_format=meme_format, finalists=False, usage=usage)
         return _Built(
             meme.png,
             meme.width,

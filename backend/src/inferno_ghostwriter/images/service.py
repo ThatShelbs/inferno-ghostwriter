@@ -1,7 +1,7 @@
-"""Design and render every image in a post, with credits and redraw history.
+"""Design and render every image in a post, with credits, finalists and redraw history.
 
-Every image is authored by Claude: illustrations, icons and diagrams as SVG, charts as
-Vega-Lite specs, and memes as a format from the meme catalog (``images/memes``). All are
+Every image goes through a room with the same flow (pitch, draw candidates, judge, refine, keep finalists):
+``OpeningRoom`` for the opening image, ``MemeMaker`` for the closing meme and ``BodyRoom`` for in-body images. All are
 rendered locally; no model-generated code runs.
 """
 
@@ -9,50 +9,49 @@ from __future__ import annotations
 
 import json
 import logging
+import random
 import re
 import traceback
-from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel
 from sqlalchemy import Engine
 from sqlmodel import Session, col, select
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage
 from inferno_ghostwriter.images import remix as remixing
-from inferno_ghostwriter.images.base import PLACEHOLDER_RE, ImageProviderError, draw_with_retry
+from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError
+from inferno_ghostwriter.images.body import BodyContext, BodyRoom
 from inferno_ghostwriter.images.memes import (
     ArtDirection,
     MemeContext,
     MemeMaker,
-    MemeResult,
     get_format,
     load_state,
     plan_callbacks,
     voice_section,
 )
-from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningResult, OpeningRoom, opening_meme_spec
+from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom, opening_meme_spec
 from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
-from inferno_ghostwriter.images.render import add_meme_text, svg_to_png, vega_to_png
-from inferno_ghostwriter.images.specs import ChartSpec, SvgMemeSpec, SvgSpec
-from inferno_ghostwriter.images.taste import Taste, taste_of
-from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
+from inferno_ghostwriter.images.opening.styles import BY_ID as OPENING_STYLES
+from inferno_ghostwriter.images.palettes import Scheme, brand_scheme, from_id, house_ramp, scheme
+from inferno_ghostwriter.images.render import add_meme_text, svg_to_png
+from inferno_ghostwriter.images.specs import SvgMemeSpec
+from inferno_ghostwriter.llm import LLM, LLMError
 from inferno_ghostwriter.llm.base import UsageSink
-from inferno_ghostwriter.prompts import raw, render
+from inferno_ghostwriter.prompts import render
 from inferno_ghostwriter.storage import Storage
 
 log = logging.getLogger(__name__)
 
-# Pixel width each SVG kind is rasterized at (height follows the SVG's viewBox).
-RENDER_WIDTH = {"hero": 1600, "illustration": 1600, "diagram": 1600, "screenshot": 1600, "icon": 768, "meme": 1080}
 MAX_EDIT_NOTES = 8
 MAX_EDIT_SPEC = 20000
 STALE_PENDING = "Generation stopped before this image was made. Click Redraw to create it."
+HISTORY_FIELDS = ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits")
 
 
 def model_label(model: str) -> str:
@@ -71,7 +70,9 @@ def tool_label(provider: str, model: str) -> str:
         "vega-lite": f"{claude} + Vega-Lite",
         "claude-meme": f"{claude} (meme)",
         "claude-opening": f"{claude} (layout)",
-        "claude-scene": f"{claude} + character kit",
+        "claude-scene": f"{claude} (scene)",
+        "claude-art": f"{claude} (generative art)",
+        "claude-diagram": f"{claude} (diagram)",
         "placeholder": "Inferno Ghostwriter",
     }.get(provider, provider)
 
@@ -97,7 +98,7 @@ def image_context(markdown: str, slot_id: str, before: int = 1500, after: int = 
     return PLACEHOLDER_RE.sub("", snippet).strip()
 
 
-DEFAULT_VISUAL_STYLE = "warm flat-vector editorial illustration in inferno tones"
+DEFAULT_VISUAL_STYLE = "clean, polished flat-vector editorial style"
 
 
 def brand_guidance(brand_kit: dict[str, Any] | None, persona: Persona) -> tuple[str, str]:
@@ -134,7 +135,7 @@ def _resolved(dials: dict[str, Any], persona: Persona, brief: str) -> Any:
 
 
 def _formula_note(dials: dict[str, Any], persona: Persona, brief: str) -> str:
-    """The post's formula as the meme's writers' room should read it: the same one the writer followed."""
+    """The post's formula as the meme room should read it: the same one the writer followed."""
     from inferno_ghostwriter.writer.formulas import NOTE_FIELDS, PART_FIELDS, ResolvedFormula, meme_note
 
     resolved = _resolved(dials, persona, brief)
@@ -158,7 +159,6 @@ def meme_spec(image: ProjectImage) -> str:
 def remix_dimensions(image: ProjectImage) -> tuple[str, ...]:
     """What a redraw of this image may vary (colors, cast, staging, medium): it depends on the kind and opening style."""
     if is_meme(image):
-        # A meme's look and the ghost are its own tools; the twist offers colors and another cast on top.
         return remixing.KIND_DIMENSIONS["meme"]
     style = str((load_opening_state(image.spec) or {}).get("style") or "") if image.kind == "hero" else ""
     return remixing.dimensions_for(image.kind, style)
@@ -172,6 +172,7 @@ class ImageService:
         self.storage = storage
         self.memes = MemeMaker(llm, settings)
         self.opening = OpeningRoom(llm, settings, self.memes)
+        self.body = BodyRoom(llm, settings)
 
     async def create(
         self,
@@ -185,11 +186,9 @@ class ImageService:
         rethink: bool = False,
         brand_kit: dict[str, Any] | None = None,
         instruction: str = "",
-        meme_format: str | None = None,
-        meme_concept: int | None = None,
-        meme_look: str | None = None,
-        opening_style: str | None = None,
-        opening_concept: int | None = None,
+        concept: int | None = None,
+        format: str | None = None,
+        note: str = "",
         tweaks: dict[str, str] | None = None,
         improve: bool = True,
         remix: bool = True,
@@ -197,14 +196,11 @@ class ImageService:
     ) -> ProjectImage:
         """Design and render one image, then persist the result.
 
-        A redraw critiques the current image first and adds a twist (``improve``; see ``images/remix.py``); ``tweaks``
-        pins parts of the twist ({"palette": "viridis", "cast": "dogs"}) and ``remix=False`` redraws plainly (used by
-        Redraw all, which must not change a post's look). An image with ``builds_on`` is always drawn from that
-        image's current source, so a redraw keeps the pair matched.
-
-        With an ``instruction`` the current image is edited ("make the arrows orange") instead of redrawn.
-        ``meme_format`` makes a meme in that catalog format; ``meme_concept`` draws that stored pitch; ``meme_look`` sets its look.
-        For the opening image, ``opening_style`` pitches again in one style and ``opening_concept`` builds that stored pitch.
+        A fresh image (or a rethink that ran out of ideas, or another ``format``) runs the whole room and keeps its
+        finalists. A redraw critiques the current image first and adds a twist (``improve``; see ``images/remix.py``);
+        ``tweaks`` pins parts of the twist and ``remix=False`` redraws plainly (Redraw all). ``concept`` draws that
+        stored idea; ``note`` is the author's steer in their own words. With an ``instruction`` the current image is
+        edited instead of redrawn.
         """
         with Session(self.engine) as session:
             image = session.get(ProjectImage, image_id)
@@ -224,11 +220,9 @@ class ImageService:
                     redraw=redraw,
                     rethink=rethink,
                     brand_kit=brand_kit,
-                    meme_format=meme_format,
-                    meme_concept=meme_concept,
-                    meme_look=meme_look,
-                    opening_style=opening_style,
-                    opening_concept=opening_concept,
+                    concept=concept,
+                    format=format,
+                    note=note.strip(),
                     tweaks=tweaks,
                     improve=improve,
                     remix=remix,
@@ -261,10 +255,7 @@ class ImageService:
             return len(rows)
 
     def save_upload(self, image_id: int, png: bytes, width: int, height: int, persona: Persona) -> ProjectImage:
-        with Session(self.engine) as session:
-            image = session.get(ProjectImage, image_id)
-            if image is None:
-                raise KeyError(image_id)
+        image = self._get(image_id)
         file_name = self._write(image.project_id, image.slot_id, png)
         return self._save(
             image_id,
@@ -281,39 +272,34 @@ class ImageService:
             },
         )
 
-    def set_meme_words(
-        self, image_id: int, words: dict[str, str], *, persona: Persona, brand_kit: dict[str, Any] | None = None
-    ) -> ProjectImage:
-        """Retype a meme's words and draw it again without asking Claude; raises ImageProviderError if it cannot be drawn."""
-        with Session(self.engine) as session:
-            image = session.get(ProjectImage, image_id)
-            if image is None:
-                raise KeyError(image_id)
-        if not is_meme(image):
-            raise ImageProviderError("Only memes have words to edit.")
-        meme = self.memes.reword(meme_spec(image), words, self._art_direction(brand_kit, persona, ""))
-        if image.kind == "hero":
-            opened = self.opening.with_meme(image.spec, meme)
-            updates = self._result(
-                image, opened.png, opened.width, opened.height, opened.provider, persona, spec=opened.spec, alt=opened.alt
-            )
-        else:
-            updates = self._result(image, meme.png, meme.width, meme.height, meme.provider, persona, spec=meme.spec, alt=meme.alt)
-        return self._save(image_id, {**updates, "status": "ready", "error": None})
+    def set_words(self, image_id: int, words: dict[str, str], *, persona: Persona, brand_kit: dict[str, Any] | None = None) -> ProjectImage:
+        """Retype an image's words (a meme, or a code-drawn opening image) and draw it again without asking Claude.
 
-    def set_opening_words(
-        self, image_id: int, words: dict[str, str], *, persona: Persona, brand_kit: dict[str, Any] | None = None
-    ) -> ProjectImage:
-        """Retype a code-drawn opening image's words (cheat sheet, versus, big number, framework, chart) without asking Claude."""
-        with Session(self.engine) as session:
-            image = session.get(ProjectImage, image_id)
-            if image is None:
-                raise KeyError(image_id)
-        if image.kind != "hero":
-            raise ImageProviderError("Only the opening image has these words.")
-        result = self.opening.reword(image.spec, words, self._art_direction(brand_kit, persona, ""))
-        updates = self._result(image, result.png, result.width, result.height, result.provider, persona, spec=result.spec, alt=result.alt)
-        return self._save(image_id, {**updates, "status": "ready", "error": None})
+        Raises ImageProviderError when the image has no words to retype or cannot be drawn."""
+        image = self._get(image_id)
+        art = self._art_direction(brand_kit, persona, "")
+        if is_meme(image):
+            meme = self.memes.reword(meme_spec(image), words, art)
+            drawn = self.opening.with_meme(image.spec, meme) if image.kind == "hero" else meme
+        elif image.kind == "hero":
+            drawn = self.opening.reword(image.spec, words, art)
+        else:
+            raise ImageProviderError("This image has no words to retype; use Edit instead.")
+        return self._save(image_id, {**self._result(image, drawn, persona), "status": "ready", "error": None})
+
+    def pick(self, image_id: int, index: int) -> ProjectImage:
+        """Show another finalist of the last fresh run. No model call: each finalist has its own file and source."""
+        image = self._get(image_id)
+        finalists = list(image.finalists or [])
+        if not 0 <= index < len(finalists):
+            raise IndexError(index)
+        chosen = finalists[index]
+        fields: dict[str, Any] = {
+            k: chosen[k] for k in ("file_name", "provider", "spec", "alt", "caption", "width", "height") if k in chosen
+        }
+        if chosen.get("ideas") is not None:
+            fields["ideas"] = chosen["ideas"]
+        return self._save(image_id, {**fields, "edits": [], "status": "ready", "error": None})
 
     def revert(self, image_id: int, index: int) -> ProjectImage:
         with Session(self.engine) as session:
@@ -323,14 +309,27 @@ class ImageService:
             if not 0 <= index < len(image.history):
                 raise IndexError(index)
             entry = image.history[index]
-        fields: dict[str, Any] = {
-            k: entry[k]
-            for k in ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits")
-            if k in entry
-        }
+        fields: dict[str, Any] = {k: entry[k] for k in HISTORY_FIELDS if k in entry}
         return self._save(image_id, {**fields, "status": "ready", "error": None}, record=False)
 
+    def opening_may_be_meme(self, project_id: int, persona: Persona) -> bool:
+        """Whether the opening image could be a meme (then the closing meme must wait for it: meme sandwich)."""
+        from inferno_ghostwriter.images.opening.styles import may_be_meme
+
+        _, dials, brief, _ = self._post_info(project_id)
+        resolved = _resolved(dials, persona, brief)
+        if resolved is None:  # dials saved by an older version: keep the safe order
+            return True
+        return may_be_meme(resolved.opening_style, resolved.opening_eligible)
+
     # -- internals -------------------------------------------------------------
+
+    def _get(self, image_id: int) -> ProjectImage:
+        with Session(self.engine) as session:
+            image = session.get(ProjectImage, image_id)
+            if image is None:
+                raise KeyError(image_id)
+            return image
 
     async def _produce(
         self,
@@ -343,19 +342,17 @@ class ImageService:
         redraw: bool,
         rethink: bool,
         brand_kit: dict[str, Any] | None,
-        meme_format: str | None,
-        meme_concept: int | None,
-        meme_look: str | None,
-        opening_style: str | None,
-        opening_concept: int | None,
+        concept: int | None,
+        format: str | None,
+        note: str,
         tweaks: dict[str, str] | None,
         improve: bool,
         remix: bool,
         usage: UsageSink | None,
     ) -> dict[str, Any]:
-        art = self._art_direction(brand_kit, persona, voice_profile)
+        art = replace(self._art_direction(brand_kit, persona, voice_profile), note=note)
         remixed: dict[str, Any] | None = None
-        picked = meme_concept is not None or opening_concept is not None or meme_format is not None or opening_style is not None
+        picked = concept is not None or format is not None
         # A redraw or remix builds on the author's edits; picking another idea or rethinking starts over.
         keep_edits = (
             bool(image.edits) and bool(image.spec) and not rethink and not picked and image.provider not in ("upload", "placeholder")
@@ -364,17 +361,9 @@ class ImageService:
             art = replace(art, edits=tuple(image.edits))
         if remix and (redraw or rethink or tweaks):
             art, remixed = await self._remix(
-                image,
-                art,
-                persona=persona,
-                title=title,
-                markdown=markdown,
-                brand_kit=brand_kit,
-                pins=tweaks,
-                brainstorm=improve and not picked,
-                usage=usage,
+                image, art, title=title, markdown=markdown, brand_kit=brand_kit, pins=tweaks, brainstorm=improve and not picked, usage=usage
             )
-        updates = await self._draw(
+        drawn, extra = await self._draw(
             image,
             art,
             persona=persona,
@@ -383,14 +372,16 @@ class ImageService:
             voice_profile=voice_profile,
             redraw=redraw,
             rethink=rethink,
-            brand_kit=brand_kit,
-            meme_format=meme_format,
-            meme_concept=meme_concept,
-            meme_look=meme_look,
-            opening_style=opening_style,
-            opening_concept=opening_concept,
+            concept=concept,
+            format=format,
+            note=note,
             usage=usage,
         )
+        updates = {**self._result(image, drawn, persona), **extra}
+        if drawn.finalists:
+            updates["finalists"] = [self._finalist(image, f, extra.get("ideas")) for f in drawn.finalists]
+            # The shown image is the first finalist: point it at the same file.
+            updates["file_name"] = updates["finalists"][0]["file_name"]
         if remixed is not None:
             updates["remix"] = remixed
         if image.edits and not keep_edits:
@@ -402,7 +393,6 @@ class ImageService:
         image: ProjectImage,
         art: ArtDirection,
         *,
-        persona: Persona,
         title: str,
         markdown: str,
         brand_kit: dict[str, Any] | None,
@@ -451,59 +441,103 @@ class ImageService:
         voice_profile: str,
         redraw: bool,
         rethink: bool,
-        brand_kit: dict[str, Any] | None,
-        meme_format: str | None,
-        meme_concept: int | None,
-        meme_look: str | None,
-        opening_style: str | None,
-        opening_concept: int | None,
+        concept: int | None,
+        format: str | None,
+        note: str,
         usage: UsageSink | None,
-    ) -> dict[str, Any]:
+    ) -> tuple[Drawn, dict[str, Any]]:
+        """Route to the image's room; returns the drawing and any extra fields to store."""
         kind = image.kind
-        if kind == "hero" and (meme_format is not None or meme_concept is not None) and opening_meme_spec(image.spec):
-            # The opening meme's own tools (another format, a stored pitch) work inside the opening image.
-            post = self._meme_context(image, persona, title, markdown, voice_profile, position="opening")
-            meme = await self.memes.make(
-                meme_spec(image),
-                post,
-                art,
-                redraw=redraw,
-                meme_format=meme_format,
-                concept_index=meme_concept,
-                look=meme_look,
-                review=False,
-                usage=usage,
-            )
-            return self._opening_result(image, persona, self.opening.with_meme(image.spec, meme))
+        seed = random.randrange(1 << 30)
+        # "Pitch new ideas" with a steer starts the room over instead of moving to the next stored idea.
+        restart = rethink and bool(note)
+        spec = "" if restart else image.spec
+        meme_format = format if format is not None and get_format(format) else None
         if kind == "hero":
-            context = self._opening_context(image, persona, title, markdown, voice_profile)
+            opening_style = format if format in OPENING_STYLES else None
+            if format is not None and opening_style is None and meme_format is None:
+                raise ImageProviderError(f"Unknown opening style or meme format: {format}")
+            context = self._opening_context(image, persona, title, markdown, voice_profile, note=note, seed=seed)
             result = await self.opening.make(
-                image.spec if load_opening_state(image.spec) else "",
+                spec if load_opening_state(spec) else "",
                 context,
                 art,
                 redraw=redraw,
                 rethink=rethink,
                 style=opening_style,
-                concept_index=opening_concept,
+                concept_index=concept,
                 meme_format=meme_format,
                 usage=usage,
             )
-            return self._opening_result(image, persona, result)
+            return result, {}
         if kind == "meme":
-            post = self._meme_context(image, persona, title, markdown, voice_profile)
+            if format is not None and meme_format is None:
+                raise ImageProviderError(f"Unknown meme format: {format}")
+            post = self._meme_context(image, persona, title, markdown, voice_profile, note=note, seed=seed)
             meme = await self.memes.make(
-                image.spec,
-                post,
-                art,
-                redraw=redraw,
-                rethink=rethink,
-                meme_format=meme_format,
-                concept_index=meme_concept,
-                look=meme_look,
-                usage=usage,
+                spec, post, art, redraw=redraw, rethink=rethink, meme_format=meme_format, concept_index=concept, usage=usage
             )
-            return self._meme_result(image, persona, meme)
+            return meme, {}
+        return await self._draw_body(
+            image, art, persona=persona, title=title, markdown=markdown, voice_profile=voice_profile,
+            redraw=redraw, rethink=rethink, concept=concept, format=format, note=note, seed=seed, usage=usage,
+        )  # fmt: skip
 
+    async def _draw_body(
+        self,
+        image: ProjectImage,
+        art: ArtDirection,
+        *,
+        persona: Persona,
+        title: str,
+        markdown: str,
+        voice_profile: str,
+        redraw: bool,
+        rethink: bool,
+        concept: int | None,
+        format: str | None,
+        note: str,
+        seed: int,
+        usage: UsageSink | None,
+    ) -> tuple[Drawn, dict[str, Any]]:
+        ctx = self._body_context(image, art, title=title, markdown=markdown, voice_profile=voice_profile, note=note, seed=seed)
+        ideas = {} if rethink and note else dict(image.ideas or {})
+        stored = ideas if ideas.get("concepts") and ideas.get("brief") == ctx.brief else {}
+        concepts: list[dict[str, Any]] = list(stored.get("concepts") or [])
+        variation = self._body_variation(image, art, redraw=redraw, rethink=rethink)
+
+        if concept is not None:
+            if not 0 <= concept < len(concepts):
+                raise ImageProviderError("That idea is no longer available. Click Ideas for fresh pitches.")
+            stored["chosen"], stored["tried"] = concept, sorted({*stored.get("tried", []), concept})
+            drawn = await self.body.draw(concepts[concept], ctx, "", usage)
+            return drawn, {"ideas": stored}
+        if format is not None:
+            # Another way to draw it (a diagram as a chart): one idea in that kind, from the chosen idea or the brief.
+            base = dict(concepts[stored["chosen"]]) if isinstance(stored.get("chosen"), int) else {"concept": ctx.brief}
+            drawn = await self.body.draw({**base, "kind": format}, ctx, variation, usage)
+            return drawn, {}
+        fresh_room = self.settings.image_body_candidates > 1 and not image.builds_on
+        if redraw and not rethink and stored and isinstance(stored.get("chosen"), int):
+            # Redraw the idea on show (with the redraw's critique and twist).
+            return await self.body.draw(concepts[stored["chosen"]], ctx, variation, usage), {}
+        if rethink and stored:
+            untried = [i for i in range(len(concepts)) if i not in set(stored.get("tried", []))]
+            if untried:
+                i = untried[0]
+                stored["chosen"], stored["tried"] = i, sorted({*stored.get("tried", []), i})
+                return await self.body.draw(concepts[i], ctx, variation, usage), {"ideas": stored}
+        if not fresh_room:
+            # An image that builds on another (or a one-candidate setting) is drawn straight from its brief.
+            return await self.body.draw(None, ctx, variation, usage), {}
+        exclude = [str(c.get("concept", "")) for c in concepts] if rethink else []
+        pitched = await self.body.pitch(ctx, exclude, usage)
+        drawn, index = await self.body.run(pitched, ctx, usage)
+        pitched["chosen"] = index
+        return drawn, {"ideas": pitched}
+
+    def _body_variation(self, image: ProjectImage, art: ArtDirection, *, redraw: bool, rethink: bool) -> str:
+        kind = image.kind
         variation = ""
         if rethink:
             variation = (
@@ -516,27 +550,45 @@ class ImageService:
                 f"(previous caption: {image.caption!r})."
             )
         if planned := remixing.variation_for(art, remixing.dimensions_for(kind), kind=kind):
-            # The redraw's own brainstorm and twist replace the generic line.
             rethought = "\nThrow out the previous concept and design a completely different idea that serves the same purpose."
             variation = planned + (rethought if rethink else "")
         if art.edits and image.spec and not rethink:
             variation += remixing.edit_note(art.edits, image.spec[:MAX_EDIT_SPEC])
-        prompt = render(
-            "image_spec",
-            kind=kind,
+        return variation
+
+    def _body_context(
+        self, image: ProjectImage, art: ArtDirection, *, title: str, markdown: str, voice_profile: str, note: str, seed: int
+    ) -> BodyContext:
+        return BodyContext(
+            kind=image.kind,
             slot_id=image.slot_id,
             title=title,
             purpose=image.purpose,
             brief=image.prompt or image.purpose,
             visual_style=art.visual_style,
             brand=art.brand,
-            variation=variation,
-            image_guidance=image_guidance(voice_profile),
+            image_guidance=art.image_guidance or image_guidance(voice_profile),
             siblings=self._siblings(image),
             builds_on=self._builds_on(image),
             context=image_context(markdown, image.slot_id),
+            markdown=markdown,
+            palette=art.palette,
+            scheme=self._post_scheme(image.project_id, art.palette),
+            note=note,
+            seed=seed,
+            reference=art.reference,
         )
-        return await self._render_design(image, persona, prompt, task=f"{kind} image design", palette=art.palette, usage=usage)
+
+    def _post_scheme(self, project_id: int, palette: tuple[str, ...]) -> Scheme:
+        """One color ramp for every image of a post: the brand palette, else the opening image's ramp on white."""
+        if len(palette) >= 3 and house_ramp(palette) is None:
+            return brand_scheme(palette)
+        with Session(self.engine) as session:
+            hero = session.exec(
+                select(ProjectImage).where(col(ProjectImage.project_id) == project_id, col(ProjectImage.kind) == "hero")
+            ).first()
+        found = from_id(str((load_opening_state(hero.spec) or {}).get("scheme") or "")) if hero else None
+        return scheme(found.ramp_id if found is not None and found.ramp_id != "brand" else "inferno", "white")
 
     async def _edit(
         self,
@@ -550,16 +602,15 @@ class ImageService:
         """Change the current design as the author asks, keeping everything else about it."""
         if image.provider in ("upload", "placeholder") or not image.spec:
             raise ImageProviderError("Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
+        art = self._art_direction(brand_kit, persona, "")
         if image.kind == "meme" and load_state(image.spec):
-            meme = await self.memes.edit(image.spec, instruction, self._art_direction(brand_kit, persona, ""), usage=usage)
-            return self._meme_result(image, persona, meme)
+            return self._result(image, await self.memes.edit(image.spec, instruction, art, usage=usage), persona)
         if image.kind == "hero" and load_opening_state(image.spec):
             with Session(self.engine) as session:
                 project = session.get(Project, image.project_id)
                 title, markdown = (project.title, project.markdown) if project else ("", "")
             context = self._opening_context(image, persona, title, markdown, "")
-            result = await self.opening.edit(image.spec, instruction, context, self._art_direction(brand_kit, persona, ""), usage=usage)
-            return self._opening_result(image, persona, result)
+            return self._result(image, await self.opening.edit(image.spec, instruction, context, art, usage=usage), persona)
         _, brand = brand_guidance(brand_kit, persona)
         prompt = render(
             "image_edit",
@@ -571,66 +622,22 @@ class ImageService:
             spec=image.spec,
             brand=brand,
         )
-        return await self._render_design(
-            image, persona, prompt, task=f"{image.kind} image edit", palette=brand_palette(brand_kit), usage=usage
-        )
+        if image.kind == "meme":  # an older meme: plain SVG with captions on top
+            meme, _ = await self._legacy_meme(prompt, usage)
+            return self._result(image, meme, persona)
+        kind = "chart" if image.provider == "vega-lite" else image.kind
+        drawn = await self.body.design(kind, prompt, task=f"{image.kind} image edit", palette=brand_palette(brand_kit), usage=usage)
+        return self._result(image, drawn, persona)
 
-    async def _render_design(
-        self, image: ProjectImage, persona: Persona, prompt: str, *, task: str, palette: tuple[str, ...] = (), usage: UsageSink | None
-    ) -> dict[str, Any]:
-        """Ask Claude for the design and draw it; a design that cannot be drawn gets one more try with the error quoted back."""
-        kind = image.kind
-        system = [SystemBlock(raw("image_system"), cache=True)]
-
-        async def design[S: BaseModel](schema: type[S], draw: Callable[[S], tuple[bytes, int, int]]) -> tuple[S, tuple[bytes, int, int]]:
-            async def ask(note: str) -> S:
-                return await self.llm.structured(
-                    task=task,
-                    system=system,
-                    prompt=prompt + note,
-                    schema=schema,
-                    effort=self.settings.effort_images,
-                    max_tokens=24000,
-                    usage=usage,
-                )
-
-            return await draw_with_retry(ask, lambda made, _last: draw(made))
-
-        if kind == "chart":
-            chart, (png, w, h) = await design(
-                ChartSpec, lambda c: vega_to_png(c.vega_lite_json, palette=palette, illustrative=c.data_is_illustrative)
-            )
-            caption = chart.caption
-            if chart.data_is_illustrative and "illustrative" not in caption.lower():
-                caption = f"{caption} (illustrative data)"
-            return self._result(image, png, w, h, "vega-lite", persona, spec=chart.vega_lite_json, alt=chart.alt, caption=caption)
-
-        if kind == "meme":
-            meme, (png, w, h) = await design(SvgMemeSpec, lambda m: svg_to_png(m.svg, width=RENDER_WIDTH["meme"]))
-            png = add_meme_text(png, meme.top_text, meme.bottom_text)
-            spec = json.dumps({"svg": meme.svg, "top": meme.top_text, "bottom": meme.bottom_text})
-            return self._result(image, png, w, h, "claude-svg", persona, spec=spec, alt=meme.alt, caption=meme.caption)
-
-        svg, (png, w, h) = await design(SvgSpec, lambda d: svg_to_png(d.svg, width=RENDER_WIDTH.get(kind, 1600)))
-        return self._result(image, png, w, h, "claude-svg", persona, spec=svg.svg, alt=svg.alt, caption=svg.caption)
-
-    def _meme_result(self, image: ProjectImage, persona: Persona, meme: MemeResult) -> dict[str, Any]:
-        return self._result(
-            image, meme.png, meme.width, meme.height, meme.provider, persona, spec=meme.spec, alt=meme.alt, caption=meme.caption
-        )
-
-    def _opening_result(self, image: ProjectImage, persona: Persona, result: OpeningResult) -> dict[str, Any]:
-        return self._result(
-            image,
-            result.png,
-            result.width,
-            result.height,
-            result.provider,
-            persona,
-            spec=result.spec,
-            alt=result.alt,
-            caption=result.caption,
-        )
+    async def _legacy_meme(self, prompt: str, usage: UsageSink | None) -> tuple[Drawn, SvgMemeSpec]:
+        meme = await self.llm.structured(
+            task="meme image edit", system=self.body.system, prompt=prompt, schema=SvgMemeSpec,
+            effort=self.settings.effort_images, max_tokens=24000, usage=usage,
+        )  # fmt: skip
+        png, w, h = svg_to_png(meme.svg, width=1080)
+        png = add_meme_text(png, meme.top_text, meme.bottom_text)
+        spec = json.dumps({"svg": meme.svg, "top": meme.top_text, "bottom": meme.bottom_text})
+        return Drawn(png, w, h, "claude-svg", spec, meme.alt, meme.caption), meme
 
     def _post_info(self, project_id: int) -> tuple[dict[str, Any], dict[str, Any], str, list[str]]:
         """The project's plan, dials, brief and pinned titles."""
@@ -641,11 +648,19 @@ class ImageService:
             return dict(project.plan or {}), dict(project.dials or {}), project.prompt, list(project.pinned_titles or [])
 
     def _meme_context(
-        self, image: ProjectImage, persona: Persona, title: str, markdown: str, voice_profile: str, *, position: str = "closing"
+        self,
+        image: ProjectImage,
+        persona: Persona,
+        title: str,
+        markdown: str,
+        voice_profile: str,
+        *,
+        position: str = "closing",
+        note: str = "",
+        seed: int | None = None,
     ) -> MemeContext:
         plan, dials, brief, _ = self._post_info(image.project_id)
         humor = dials.get("humor")
-        taste = self._taste(persona)
         return MemeContext(
             title=title,
             markdown=markdown,
@@ -655,36 +670,32 @@ class ImageService:
             callbacks=plan_callbacks(plan),
             humor=int(humor) if humor is not None else persona.default_humor,
             recent_formats=self._recent_meme_formats(persona, image.project_id),
-            recent_looks=self._recent_meme_looks(persona, image.project_id),
             formula=_formula_note(dials, persona, brief),
             position=position,
             opening=self._opening_meme_note(image.project_id) if position == "closing" else "",
             recent_schemes=self._recent_schemes(persona, image.project_id),
-            taste=taste.note(("format", "look", "cast")),
-            look_weights=taste.look_weights() or None,
+            note=note,
+            seed=seed,
         )
 
-    def opening_may_be_meme(self, project_id: int, persona: Persona) -> bool:
-        """Whether the opening image could be a meme (then the closing meme must wait for it: meme sandwich).
-
-        A fixed non-meme opening style, or an Auto post where no meme style is eligible (low humor), lets the
-        closing meme start at once instead of queueing behind the opening image.
-        """
-        from inferno_ghostwriter.images.opening.styles import may_be_meme
-
-        _, dials, brief, _ = self._post_info(project_id)
-        resolved = _resolved(dials, persona, brief)
-        if resolved is None:  # dials saved by an older version: keep the safe order
-            return True
-        return may_be_meme(resolved.opening_style, resolved.opening_eligible)
-
-    def _opening_context(self, image: ProjectImage, persona: Persona, title: str, markdown: str, voice_profile: str) -> OpeningContext:
+    def _opening_context(
+        self,
+        image: ProjectImage,
+        persona: Persona,
+        title: str,
+        markdown: str,
+        voice_profile: str,
+        *,
+        note: str = "",
+        seed: int | None = None,
+    ) -> OpeningContext:
         plan, dials, brief, pinned = self._post_info(image.project_id)
         resolved = _resolved(dials, persona, brief)
         humor = resolved.humor if resolved is not None else persona.default_humor
         formula = ""
         if resolved is not None and (resolved.article_type != "auto" or resolved.opener != "auto"):
             formula = f"The post's formula: {resolved.formula_label}."
+        dial_note = resolved.opening_note if resolved is not None else ""
         return OpeningContext(
             title=title,
             markdown=markdown,
@@ -695,14 +706,14 @@ class ImageService:
             titles=tuple(t for t in [*pinned, *(plan.get("title_options") or [])] if t and t != title)[:4],
             humor=humor,
             style=resolved.opening_style if resolved is not None else "auto",
-            note=resolved.opening_note if resolved is not None else "",
+            note=" ".join(n for n in (dial_note, note) if n),
             suggested=tuple(resolved.opening_suggested) if resolved is not None else (),
             eligible=tuple(resolved.opening_eligible) if resolved is not None else (),
             formula=formula,
             recent_styles=self._recent_opening_styles(persona, image.project_id),
-            meme_context=self._meme_context(image, persona, title, markdown, voice_profile, position="opening"),
+            meme_context=self._meme_context(image, persona, title, markdown, voice_profile, position="opening", note=note, seed=seed),
             recent_schemes=self._recent_schemes(persona, image.project_id),
-            taste=self._taste(persona).note(("style", "cast", "ramp")),
+            seed=seed,
         )
 
     def _opening_meme_note(self, project_id: int) -> str:
@@ -741,30 +752,6 @@ class ImageService:
                 schemes.append(found)
         return tuple(schemes[:limit])
 
-    def _taste(self, persona: Persona) -> Taste:
-        """What this author liked and passed on, from their thumbs on opening images and memes."""
-        with Session(self.engine) as session:
-            rows = session.exec(
-                select(ProjectImage.kind, ProjectImage.spec, ProjectImage.rating)
-                .join(Project, col(Project.id) == col(ProjectImage.project_id))
-                .where(col(Project.persona_id) == persona.id, col(ProjectImage.rating) != 0)
-                .order_by(col(Project.updated_at).desc())
-                .limit(60)
-            ).all()
-        return taste_of(rows)
-
-    def rate(self, image_id: int, rating: int) -> ProjectImage:
-        """Store the author's thumbs (1, -1, or 0 to clear) on an image."""
-        with Session(self.engine) as session:
-            image = session.get(ProjectImage, image_id)
-            if image is None:
-                raise ImageProviderError("That image no longer exists.")
-            image.rating = max(-1, min(1, int(rating)))
-            session.add(image)
-            session.commit()
-            session.refresh(image)
-            return image
-
     def _recent_opening_styles(self, persona: Persona, project_id: int, limit: int = 3) -> tuple[str, ...]:
         """The styles of this author's latest opening images in other posts, newest first."""
         with Session(self.engine) as session:
@@ -781,6 +768,23 @@ class ImageService:
             if style and style not in styles:
                 styles.append(style)
         return tuple(styles[:limit])
+
+    def _recent_meme_formats(self, persona: Persona, project_id: int, limit: int = 3) -> tuple[str, ...]:
+        """The formats of this author's latest memes in other posts, newest first."""
+        with Session(self.engine) as session:
+            specs = session.exec(
+                select(ProjectImage.spec)
+                .join(Project, col(Project.id) == col(ProjectImage.project_id))
+                .where(col(Project.persona_id) == persona.id, col(ProjectImage.kind) == "meme", col(Project.id) != project_id)
+                .order_by(col(Project.updated_at).desc())
+                .limit(limit * 2)
+            ).all()
+        names: list[str] = []
+        for spec in specs:
+            fmt = get_format(str((load_state(spec) or {}).get("format", "")))
+            if fmt and fmt.name not in names:
+                names.append(fmt.name)
+        return tuple(names[:limit])
 
     @staticmethod
     def _art_direction(brand_kit: dict[str, Any] | None, persona: Persona, voice_profile: str) -> ArtDirection:
@@ -826,60 +830,35 @@ class ImageService:
             f"The base image's source:\n<base>\n{base.spec[:12000]}\n</base>\n"
         )
 
-    def _recent_meme_formats(self, persona: Persona, project_id: int, limit: int = 3) -> tuple[str, ...]:
-        """The formats of this author's latest memes in other posts, newest first."""
-        with Session(self.engine) as session:
-            specs = session.exec(
-                select(ProjectImage.spec)
-                .join(Project, col(Project.id) == col(ProjectImage.project_id))
-                .where(col(Project.persona_id) == persona.id, col(ProjectImage.kind) == "meme", col(Project.id) != project_id)
-                .order_by(col(Project.updated_at).desc())
-                .limit(limit * 2)
-            ).all()
-        names: list[str] = []
-        for spec in specs:
-            fmt = get_format(str((load_state(spec) or {}).get("format", "")))
-            if fmt and fmt.name not in names:
-                names.append(fmt.name)
-        return tuple(names[:limit])
-
-    def _recent_meme_looks(self, persona: Persona, project_id: int, limit: int = 3) -> tuple[str, ...]:
-        """The looks of this author's latest memes (closing and opening) in other posts, newest first."""
-        with Session(self.engine) as session:
-            rows = session.exec(
-                select(ProjectImage.kind, ProjectImage.spec)
-                .join(Project, col(Project.id) == col(ProjectImage.project_id))
-                .where(col(Project.persona_id) == persona.id, col(ProjectImage.kind).in_(("meme", "hero")), col(Project.id) != project_id)
-                .order_by(col(Project.updated_at).desc())
-                .limit(limit * 4)
-            ).all()
-        looks: list[str] = []
-        for kind, spec in rows:
-            state = load_state(spec) if kind == "meme" else load_state(opening_meme_spec(spec) or "")
-            look = str((state or {}).get("look") or "")
-            if look and look not in looks:
-                looks.append(look)
-        return tuple(looks[:limit])
-
-    def _result(
-        self,
-        image: ProjectImage,
-        png: bytes,
-        width: int,
-        height: int,
-        provider: str,
-        persona: Persona,
-        **fields: Any,
-    ) -> dict[str, Any]:
+    def _result(self, image: ProjectImage, drawn: Drawn, persona: Persona) -> dict[str, Any]:
         return {
-            "file_name": self._write(image.project_id, image.slot_id, png),
-            "provider": provider,
-            "width": width,
-            "height": height,
-            "credit": credit_line(persona, provider, self.settings.model),
+            "file_name": self._write(image.project_id, image.slot_id, drawn.png),
+            "provider": drawn.provider,
+            "width": drawn.width,
+            "height": drawn.height,
+            "credit": credit_line(persona, drawn.provider, self.settings.model),
             "seed": None,
-            **fields,
+            "spec": drawn.spec,
+            "alt": drawn.alt,
+            "caption": drawn.caption,
         }
+
+    def _finalist(self, image: ProjectImage, drawn: Drawn, ideas: dict[str, Any] | None) -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "file_name": self._write(image.project_id, image.slot_id, drawn.png),
+            "provider": drawn.provider,
+            "spec": drawn.spec,
+            "alt": drawn.alt,
+            "caption": drawn.caption,
+            "width": drawn.width,
+            "height": drawn.height,
+            "label": drawn.label,
+            "score": drawn.score,
+            "reads_as": drawn.reads_as,
+        }
+        if ideas is not None:
+            entry["ideas"] = ideas
+        return entry
 
     def _write(self, project_id: int, slot_id: str, png: bytes) -> str:
         name = f"{slot_id}-{uuid4().hex[:8]}.png"
@@ -891,15 +870,10 @@ class ImageService:
             image = session.get(ProjectImage, image_id)
             if image is None:
                 raise KeyError(image_id)
-            if updates.get("file_name") and updates["file_name"] != image.file_name and "rating" not in updates:
-                image.rating = 0  # a thumbs up or down was for the old picture
             for key, value in updates.items():
                 setattr(image, key, value)
             if record and updates.get("file_name"):
-                entry = {
-                    k: getattr(image, k)
-                    for k in ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits")
-                }
+                entry = {k: getattr(image, k) for k in HISTORY_FIELDS}
                 entry["created_at"] = datetime.now(UTC).isoformat()
                 image.history = [*image.history, entry]
             session.add(image)

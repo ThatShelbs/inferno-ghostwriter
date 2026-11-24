@@ -1,4 +1,4 @@
-"""Structured outputs for the opening room: pitches, a template build and a kit scene (judging is images/panel.py)."""
+"""Structured outputs for the opening room: pitches, a template build and a kit scene (judging is images/judge.py)."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ class OpeningConcept(BaseModel):
         "",
         description="At a glance, a reader sees ___ and understands ___ (one sentence a stranger could confirm from the picture alone).",
     )
+    anchor: str = Field("", description="The exact words (5-15, copied verbatim) from the post this concept is built on.")
 
 
 class OpeningIdeas(BaseModel):

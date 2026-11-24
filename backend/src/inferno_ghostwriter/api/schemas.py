@@ -579,6 +579,74 @@ class RemixOut(BaseModel):
     brainstormed: bool
 
 
+class PitchOut(BaseModel):
+    """One idea the image's room pitched (the same shape for the opening image, the meme and in-body images)."""
+
+    index: int
+    # The meme format, opening style or in-body kind it uses, and its label.
+    format: str
+    format_label: str
+    hook: str
+    concept: str
+    # A meme's words, in slot order (empty for other kinds).
+    words: list[str] = []
+    # The passage of the post it riffs on, and whether that quote is really in the post.
+    anchor: str = ""
+    anchored: bool = True
+    # What the judge saw in the drawn picture ("" when it was not drawn yet).
+    reads_as: str = ""
+    # The judge's score, 0-10 (None when not judged).
+    score: float | None = None
+    note: str = ""
+    ruled_out: bool = False
+    tried: bool = False
+    current: bool = False
+
+
+class WordSlotOut(BaseModel):
+    """One piece of text in the image the author can retype with no model call."""
+
+    name: str
+    hint: str
+    text: str
+    max_chars: int
+    optional: bool
+
+
+class SourceOut(BaseModel):
+    title: str
+    url: str
+
+
+class ImageRoomOut(BaseModel):
+    """The image's ideas board: what it is, the pitches, and the judge's view."""
+
+    # "opening", "meme" or "body": which formats the room can switch to (GET /api/image-formats?room=...).
+    room: str
+    format: str
+    format_label: str
+    # The judge's one line on why the current picture won ("" when not judged).
+    why: str = ""
+    ideas_left: int = 0
+    # Label of the format tried first when this image is a stand-in for it ("" otherwise).
+    fallback_from: str = ""
+    pitches: list[PitchOut] = []
+    # Words the author can retype (memes and code-drawn opening images).
+    slots: list[WordSlotOut] = []
+    sources: list[SourceOut] = []
+
+
+class FinalistOut(BaseModel):
+    """One of the best candidates of the last fresh run; picking it costs no model call."""
+
+    index: int
+    url: str
+    label: str
+    score: float | None
+    reads_as: str
+    current: bool
+
+
 class ImageOut(BaseModel):
     id: int
     slot_id: str
@@ -597,79 +665,23 @@ class ImageOut(BaseModel):
     status: str
     error: str | None
     history: list[ImageHistoryOut]
-    # Memes only: the format and joke in use, and how many other pitched ideas "New idea" can still try.
-    # An opening meme (a meme sandwich) has this too, alongside ``opening``.
-    meme: MemeInfoOut | None = None
-    # The opening image only: its style, the panel's pitches and verdicts, sources and the render review.
-    opening: OpeningInfoOut | None = None
+    # The ideas board (every image Claude drew has one; None for uploads and older images).
+    room: ImageRoomOut | None = None
+    finalists: list[FinalistOut] = []
     # The slot id of the earlier image this one extends ("" = stands alone); both are drawn from one source.
     builds_on: str = ""
     # What the last redraw tried; None before the first redraw.
     remix: RemixOut | None = None
     # What Remix can vary for this image: "palette", "cast", "staging", "medium" (see GET /api/remix-options).
     remix_dimensions: list[str] = []
-    # The author's thumbs: 1 liked, -1 passed, 0 none (opening images and memes; it teaches the persona's taste).
-    rating: int = 0
 
 
-class RatingIn(BaseModel):
-    rating: int = Field(ge=-1, le=1)
-
-
-class OpeningPitchOut(BaseModel):
-    """One concept the opening room pitched, with the panel's scores."""
-
-    index: int
-    style: str
-    style_label: str
-    template: str
-    hook: str
-    concept: str
-    # Each judge's 1-10 score, by seat ("scroller (haiku, low)"); older images: scroller, art_director, fact_checker, author.
-    scores: dict[str, int]
-    note: str
-    total: int
-    # A fact checker or author score under 5 rules a concept out (it is still on the board).
-    ruled_out: bool
-    tried: bool
-    current: bool
-
-
-class OpeningSourceOut(BaseModel):
-    title: str
-    url: str
-
-
-class OpeningReviewOut(BaseModel):
-    # "passed", "redrawn" (sent back once and redrawn), "kept" (the redraw was not better) or "skipped".
-    verdict: str
-    clickability: int = 0
-    craft: int = 0
-    problems: list[str] = []
-    note: str = ""
-    # The render panel: why the final pick chose this picture, the fix it asked for, and what blind readers saw in it.
-    why: str = ""
-    fix: str = ""
-    readings: list[str] = []
-
-
-class OpeningInfoOut(BaseModel):
-    style: str
-    style_label: str
-    template: str
-    # "auto" when the panel chose across styles, else the one style the pitches were limited to.
-    mode: str
-    summary: str
-    ideas_left: int
-    # Label of the style that was tried first when this image is a stand-in for it ("" otherwise).
-    fallback_from: str
-    pitches: list[OpeningPitchOut]
-    sources: list[OpeningSourceOut]
-    review: OpeningReviewOut | None
-    # Words the author can retype with no model call (code-drawn styles only; numbers are not among them).
-    slots: list[MemeSlotOut]
-    # How platform thumbnails are cut from it: "cover" (centre crop) or "contain" (padded).
-    thumbnail_fit: str
+class ImageFormatOut(BaseModel):
+    id: str
+    label: str
+    # The group it is listed under (a meme family, "Opening styles", "Ways to draw it").
+    group: str
+    when_to_use: str
 
 
 class OpeningStyleOut(BaseModel):
@@ -683,79 +695,17 @@ class OpeningStyleOut(BaseModel):
 
 class OpeningCatalogOut(BaseModel):
     styles: list[OpeningStyleOut]
-    # Style ids that suit each article type best (key "auto" = no type), in the order the panel weighs them.
+    # Style ids that suit each article type best (key "auto" = no type), in the order the judge weighs them.
     suggested_by_type: dict[str, list[str]]
 
 
-class OpeningWordsIn(BaseModel):
-    # Slot name -> new text (see ``ImageOut.opening.slots``); slots left out keep their words.
+class WordsIn(BaseModel):
+    # Slot name -> new text (see ``ImageOut.room.slots``); slots left out keep their words.
     words: dict[str, str] = Field(min_length=1)
 
 
-class MemePitchOut(BaseModel):
-    """One joke the writers' room pitched for this meme."""
-
-    index: int
-    format: str
-    format_name: str
-    premise: str
-    words: list[str]
-    tried: bool
-    current: bool
-    # The independent panel's total (four judges, 4-40; a joke a cold reader would not get scores far lower), if it judged.
-    panel_score: int | None = None
-
-
-class MemeSlotOut(BaseModel):
-    """One piece of text in the meme, as the author can retype it."""
-
-    name: str
-    hint: str
-    text: str
-    max_chars: int
-    optional: bool
-
-
-class MemeInfoOut(BaseModel):
-    format: str
-    format_name: str
-    premise: str
-    ideas_left: int
-    # False for formats drawn entirely by the template (chat, terminal, charts): there is no art to redraw.
-    has_art: bool
-    # Name of the format Claude could not draw, when this meme is a stand-in for it ("" otherwise).
-    fallback_from: str
-    pitches: list[MemePitchOut]
-    slots: list[MemeSlotOut]
-    # The look the meme is drawn in (older memes read as the brand look).
-    look: str = "inferno_flat"
-    look_label: str = "Inferno flat"
-    # How the render review went: passed, redrawn, kept, skipped or "" (no review, e.g. formats with no art).
-    review_verdict: str = ""
-    # The render panel's pick: why this meme won, and what strangers read in it with no context.
-    review_why: str = ""
-    review_readings: list[str] = []
-
-
-class MemeWordsIn(BaseModel):
-    # Slot name -> new text; slots left out keep their words.
-    words: dict[str, str] = Field(min_length=1)
-
-
-class MemeLookOut(BaseModel):
-    id: str
-    label: str
-    description: str
-    # Five colors of the look's palette, for the Look menu's swatch strip.
-    swatch: list[str]
-
-
-class MemeFormatOut(BaseModel):
-    id: str
-    name: str
-    family: str
-    family_label: str
-    when_to_use: str
+class PickIn(BaseModel):
+    index: int = Field(ge=0)
 
 
 class ImageUpdate(BaseModel):
@@ -767,18 +717,15 @@ class ImageUpdate(BaseModel):
 
 class RedrawIn(BaseModel):
     rethink: bool = False
-    # Memes only: make the meme in this catalog format (see GET /api/meme-formats).
-    meme_format: str | None = None
-    # Memes only: draw this stored pitch (an index from ``ImageOut.meme.pitches``).
-    meme_concept: int | None = Field(default=None, ge=0)
-    # Memes only: draw the meme in this look (see GET /api/meme-looks); without one a redraw picks a different look.
-    meme_look: str | None = None
-    # The opening image only: pitch again in this style (see GET /api/opening-styles), or build this stored pitch
-    # (an index from ``ImageOut.opening.pitches``) with no new pitching or judging.
-    opening_style: str | None = None
-    opening_concept: int | None = Field(default=None, ge=0)
+    # Draw this stored idea (an index from ``ImageOut.room.pitches``) with no new pitching.
+    concept: int | None = Field(default=None, ge=0)
+    # Pitch again in this format: a meme format, an opening style or another way to draw an in-body image
+    # (see GET /api/image-formats).
+    format: str | None = None
+    # The author's steer in their own words ("fewer words", "more like the original").
+    note: str = Field("", max_length=500)
     # Pin parts of the redraw's twist, e.g. {"palette": "viridis", "cast": "dogs"} (see GET /api/remix-options);
-    # anything left out is chosen for you. Memes and the opening meme take palette and cast.
+    # anything left out is chosen for you.
     tweaks: dict[str, str] | None = None
     # Critique the current image first and redraw to fix it (the default); False only tries the twist.
     improve: bool = True

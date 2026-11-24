@@ -2,25 +2,17 @@
 
 from __future__ import annotations
 
-import asyncio
 import io
-import json
-import re
-import sys
-import time
 from pathlib import Path
 from typing import Any
 
-import pytest
 from PIL import Image
 from pydantic import BaseModel
 
-from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.demo import FakeLLM
 from inferno_ghostwriter.images.kit import ACCESSORIES, EXPRESSIONS, KINDS, POSES, STYLES, Character, draw
 from inferno_ghostwriter.images.kit.rig import REST_L, REST_R
 from inferno_ghostwriter.images.lint import lint
-from inferno_ghostwriter.images.opening.feedcard import feed_card
 from inferno_ghostwriter.images.opening.scene import LAYOUTS, compose_scene
 from inferno_ghostwriter.images.opening.specs import SceneSpec
 from inferno_ghostwriter.images.palettes import (
@@ -36,13 +28,9 @@ from inferno_ghostwriter.images.palettes import (
     scheme,
     snap_svg,
 )
-from inferno_ghostwriter.images.panel import FinalPick, Seat, SeatVerdict, convene, final_pick, parse_seats
 from inferno_ghostwriter.images.remix import HOUSE, PALETTE, choose_tweaks
 from inferno_ghostwriter.images.render import svg_to_png
-from inferno_ghostwriter.images.taste import features, taste_of
-from inferno_ghostwriter.llm import LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError
-from inferno_ghostwriter.llm.claude_code import ClaudeCodeCLI, ClaudeCodeLLM
 
 # -- palettes -----------------------------------------------------------------------------------------------------------
 
@@ -139,11 +127,8 @@ def test_a_scene_places_kit_characters_props_and_one_linted_object() -> None:
             alt="a",
             caption="c",
         )
-        png, width, height, problems = compose_scene(spec, sch)
+        _png, width, height, problems = compose_scene(spec, sch)
         assert (width, height) == (1600, 900) and problems == [], layout
-    card = feed_card(png, "A very long title that has to fit under the thumbnail in a feed card")
-    with Image.open(io.BytesIO(card)) as img:
-        assert img.size == (1200, 780)
 
 
 # -- lint ---------------------------------------------------------------------------------------------------------------
@@ -166,46 +151,6 @@ def test_lint_removes_strays_and_reports_dead_references_and_text_outside_the_ba
     assert any("shapes" in p for p in budget.problems)
 
 
-# -- the panel ----------------------------------------------------------------------------------------------------------
-
-
-class SlowLLM(FakeLLM):
-    """Every seat takes a while; one seat fails, one cannot see images."""
-
-    async def structured(self, *, task: str, schema: type[BaseModel], **kwargs: Any) -> Any:
-        if schema is SeatVerdict:
-            await asyncio.sleep(0.3)
-            if task == "panel author":
-                raise LLMError("author seat down")
-        return await super().structured(task=task, schema=schema, **kwargs)
-
-
-async def test_seats_run_at_once_on_their_own_models_and_a_failed_seat_is_dropped() -> None:
-    llm = SlowLLM()
-    seats = parse_seats(["scroller:haiku:low", "gets_it:haiku:low", "comedy_editor:sonnet:medium", "author:opus:high", "bogus:x:y"])
-    assert [s.role for s in seats] == ["scroller", "gets_it", "comedy_editor", "author"]
-    started = time.monotonic()
-    result = await convene(llm, seats, context="ctx", candidates=["a", "b", "c"])
-    assert time.monotonic() - started < 0.9  # four 0.3s seats in parallel, not 1.2s in a row
-    assert result.ok and result.answered == 3 and result.asked == 4 and len(result.totals) == 3
-    calls = {c["task"]: c for c in llm.calls if c["task"].startswith("panel ")}
-    assert calls["panel scroller"]["model"] == "claude-haiku-5-5" and calls["panel comedy_editor"]["effort"] == "medium"
-    assert result.best() == 0 and result.ranking()[0] == 0
-
-
-class VetoLLM(FakeLLM):
-    async def structured(self, *, task: str, schema: type[BaseModel], **kwargs: Any) -> Any:
-        if schema is SeatVerdict:
-            low = 2 if task == "panel gets_it" else 9
-            return SeatVerdict(scores=[{"candidate": i, "score": low if i == 0 else 6, "note": "n"} for i in range(2)])  # type: ignore[list-item]
-        return await super().structured(task=task, schema=schema, **kwargs)
-
-
-async def test_a_veto_rules_a_candidate_out_whatever_the_other_seats_say() -> None:
-    result = await convene(VetoLLM(), parse_seats(["scroller:haiku:low", "gets_it:haiku:low"]), context="", candidates=["a", "b"])
-    assert 0 in result.vetoed and result.totals[0] < 0 < result.totals[1] and result.best() == 1
-
-
 class BlindLLM(FakeLLM):
     """Blind readers see pictures; images may be unsupported (headless Claude Code)."""
 
@@ -219,28 +164,6 @@ class BlindLLM(FakeLLM):
         return await super().structured(task=task, schema=schema, **kwargs)
 
 
-async def test_blind_readings_are_matched_against_what_each_picture_meant() -> None:
-    llm = BlindLLM()
-    seats = parse_seats(["blind_reader:haiku:low", "craft:sonnet:medium"])
-    result = await convene(llm, seats, context="ctx", candidates=["x", "y"], images=[b"1", b"2"], intents=["one", "two"])
-    assert result.readings[0] and result.match == [8, 8]
-    blind = next(c for c in llm.calls if c["task"] == "panel blind_reader")
-    assert "ctx" not in blind["prompt"] and blind["images"] == 2  # a stranger: no context, only the pictures
-    pick_ = await final_pick(llm, context="ctx", candidates=["x", "y"], images=[b"1", b"2"], panel=result)
-    assert isinstance(pick_, FinalPick) and pick_.chosen == 0
-    none = await convene(BlindLLM(unsupported=True), seats, context="", candidates=["x"], images=[b"1"])
-    assert none.answered == 0 and not none.ok
-    assert await final_pick(BlindLLM(unsupported=True), context="", candidates=["x"], images=[b"1"], panel=None) is None
-
-
-def test_seat_specs_and_settings_line_up() -> None:
-    settings = Settings()
-    for specs in (settings.image_panel_meme, settings.image_panel_opening, settings.image_panel_render):
-        assert len(parse_seats(specs)) == len(specs)
-    assert {s.model for s in parse_seats(settings.image_panel_meme)} == {"haiku", "sonnet", "opus"}
-    assert Seat("author", "opus", "high").model_id == "claude-opus-5-5"
-
-
 FAKE = Path(__file__).parents[1] / "fixtures" / "fake_claude.py"
 
 
@@ -248,55 +171,10 @@ class Plan(BaseModel):
     title: str
 
 
-async def test_a_seat_runs_on_its_own_model_through_claude_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    record = tmp_path / "call.json"
-    monkeypatch.setenv("FAKE_CLAUDE_RECORD", str(record))
-    monkeypatch.setenv("FAKE_CLAUDE_MODE", "structured")
-    monkeypatch.setenv("FAKE_CLAUDE_PAYLOAD", json.dumps({"title": "x"}))
-    llm = ClaudeCodeLLM(Settings(_env_file=None), ClaudeCodeCLI([sys.executable, str(FAKE)]))  # type: ignore[call-arg]
-    await llm.structured(task="t", system=[SystemBlock("s")], prompt="p", schema=Plan, effort="low", model="claude-haiku-5-5")
-    args = json.loads(record.read_text(encoding="utf-8"))["args"]
-    assert args[args.index("--model") + 1] == "claude-haiku-5-5"
-
-
-def test_the_api_backend_sends_the_seat_model_and_skips_fallbacks_on_haiku() -> None:
-    from inferno_ghostwriter.llm.claude import ClaudeLLM
-
-    llm = ClaudeLLM(Settings(), lambda: None)  # type: ignore[arg-type, return-value]
-    haiku = llm._common([SystemBlock("s")], "low", 1000, "claude-haiku-5-5")
-    default = llm._common([SystemBlock("s")], "low", 1000)
-    assert haiku["model"] == "claude-haiku-5-5" and "fallbacks" not in haiku
-    assert default["model"] == "claude-opus-5-5" and default.get("fallbacks") == "default"
-
-
 # -- taste ----------------------------------------------------------------------------------------------------------------
-
-
-def test_the_authors_thumbs_become_look_weights_and_prompt_notes() -> None:
-    meme = json.dumps(
-        {"version": 2, "format": "this_is_fine", "look": "kawaii", "scheme": "magma:white", "build": {"cast": [{"kind": "dog"}]}}
-    )
-    other = json.dumps({"version": 2, "format": "venn", "look": "blueprint"})
-    hero = json.dumps({"room": "opening", "style": "editorial", "scene": {"characters": [{"kind": "cat"}]}})
-    assert features("meme", meme) == ["format:this_is_fine", "look:kawaii", "cast:dog", "ramp:magma"]
-    taste = taste_of([("meme", meme, 1), ("meme", meme, 1), ("meme", other, -1), ("hero", hero, 1), ("meme", other, 0)])
-    weights = taste.look_weights()
-    assert weights["kawaii"] > 1.5 and weights["blueprint"] < 1
-    note = taste.note(("format", "look", "cast"))
-    assert re.search(r"liked .*this is fine", note) and "turned down" in note and "venn" in note
-    assert "editorial" in taste.note(("style",)) and taste_of([]).empty
 
 
 def test_snap_leaves_css_id_selectors_alone() -> None:
     sch = scheme("inferno", "white")
     snapped = snap_svg("<svg><style>#add { fill: #00ff00 } #bad{stroke:#0000ff}</style></svg>", sch.allowed)
     assert "#add" in snapped and "#bad" in snapped and "#00ff00" not in snapped
-
-
-async def test_the_final_pick_reads_scores_before_vetoes() -> None:
-    llm = VetoLLM()
-    result = await convene(llm, parse_seats(["scroller:haiku:low", "gets_it:haiku:low"]), context="", candidates=["a", "b"])
-    assert result.raw[0] > 0 > result.totals[0] and result.summary()["totals"][0] > 0
-    await final_pick(llm, context="", candidates=["a", "b"], images=[b"1", b"2"], panel=result)
-    prompt = next(c for c in llm.calls if c["task"] == "panel final pick")["prompt"]
-    assert "-9" not in prompt and "(ruled out)" in prompt
