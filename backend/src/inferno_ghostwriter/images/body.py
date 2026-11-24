@@ -13,6 +13,7 @@ The pitches live in ``ProjectImage.ideas`` so the ideas board, Redraw and pickin
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -24,6 +25,8 @@ from pydantic import BaseModel, Field
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.diagrams import TEMPLATES, DiagramSpec, render_diagram_png
+from inferno_ghostwriter.images.diagrams import menu as diagram_menu
 from inferno_ghostwriter.images.judge import judge_sheet
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import Scheme
@@ -57,6 +60,14 @@ class BodyIdea(BaseModel):
     reader_takeaway: str = Field(description="At a glance a reader sees ___ and understands ___.")
     anchor: str = Field("", description="5-15 words copied exactly from the post that this image serves.")
     figures: str = Field("none", description="'none', or 'simple' for a few simple flat figures where a person helps the idea.")
+    template: str = Field("", description="For a diagram: a template id from the list (code draws it cleanly), or '' to draw freehand.")
+
+
+class DiagramDesign(BaseModel):
+    """A diagram template filled with the post's words (code lays it out; see images/diagrams)."""
+
+    diagram: DiagramSpec
+    caption: str = Field(description="Caption in the author's style, without the credit.")
 
 
 class BodyIdeas(BaseModel):
@@ -121,6 +132,7 @@ class BodyRoom:
             if exclude
             else "",
             cards=deal(ctx.context, seed=seed),
+            templates=diagram_menu() if "diagram" in kinds else "(none: this kind is drawn freehand)",
             siblings=ctx.siblings,
             context=ctx.context,
         )
@@ -211,6 +223,9 @@ class BodyRoom:
     async def draw(self, idea: dict[str, Any] | None, ctx: BodyContext, variation: str, usage: UsageSink | None) -> Drawn:
         """One design call for one idea (or the slot's own brief when there is none)."""
         kind = str((idea or {}).get("kind") or ctx.kind)
+        template = str((idea or {}).get("template") or "")
+        if kind == "diagram" and template in TEMPLATES and not ctx.builds_on:
+            return await self.diagram(template, concept_text(idea or {}), ctx, variation, usage)
         brief = concept_text(idea) if idea else ctx.brief
         prompt = render(
             "image_spec",
@@ -235,6 +250,55 @@ class BodyRoom:
         return await self.design(
             kind, prompt, task=f"{kind} image design", palette=ctx.palette, scheme=ctx.scheme, reference=ctx.reference, usage=usage
         )
+
+    async def diagram(self, template: str, idea: str, ctx: BodyContext, variation: str, usage: UsageSink | None) -> Drawn:
+        """A code-drawn diagram: Claude fills the template with the post's words (one call), code lays it out."""
+        t = TEMPLATES[template]
+        prompt = render(
+            "image_diagram",
+            template=template,
+            title=ctx.title,
+            purpose=ctx.purpose,
+            idea=idea,
+            variation=variation + (f"\nThe author asked: {ctx.note}" if ctx.note else ""),
+            template_line=f"`{t.id}`: {t.name}. Use when {t.use_when}. Set `diagram.template` to `{t.id}`.",
+            context=ctx.context,
+        )
+        return await self.fill_diagram(template, prompt, ctx.scheme, usage)
+
+    async def fill_diagram(self, template: str, prompt: str, scheme: Scheme | None, usage: UsageSink | None) -> Drawn:
+        from inferno_ghostwriter.images.palettes import scheme as house_scheme
+
+        async def ask(note: str) -> DiagramDesign:
+            return await self.llm.structured(
+                task="diagram design",
+                system=self.system,
+                prompt=prompt + note,
+                schema=DiagramDesign,
+                effort=self.settings.effort_images,
+                max_tokens=8000,
+                usage=usage,
+            )
+
+        def draw(made: DiagramDesign, _last: bool) -> tuple[bytes, int, int]:
+            if made.diagram.template != template:
+                raise ImageProviderError(f"Fill the `{template}` template (you returned `{made.diagram.template}`).")
+            return render_diagram_png(made.diagram, scheme or house_scheme("inferno", "white"))
+
+        made, (png, w, h) = await draw_with_retry(ask, draw)
+        return Drawn(png, w, h, "claude-diagram", made.diagram.model_dump_json(), made.diagram.alt or made.caption, made.caption)
+
+    async def edit_diagram(self, spec: str, instruction: str, scheme: Scheme | None, usage: UsageSink | None) -> Drawn:
+        """Change a code-drawn diagram's words, numbers or emphasis as the author asks; the layout stays code's."""
+        template = str(json.loads(spec).get("template") or "")
+        if template not in TEMPLATES:
+            raise ImageProviderError("This diagram can no longer be edited; Redraw it instead.")
+        prompt = (
+            f"Edit this `{template}` diagram exactly as the author asks; keep everything the instruction does not mention.\n"
+            f"<instruction>\n{instruction.strip()}\n</instruction>\nThe current diagram:\n<current>\n{spec}\n</current>\n"
+            "Return the whole edited diagram and a caption."
+        )
+        return await self.fill_diagram(template, prompt, scheme, usage)
 
     async def design(
         self,

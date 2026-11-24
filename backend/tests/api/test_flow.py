@@ -97,7 +97,7 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     assert all(img["credit"].startswith("Author: Shelby Temple") for img in project["images"])
     assert project["images"][0]["credit"] == "Author: Shelby Temple; Made with Claude Opus 5.5 (scene)"
     assert project["images"][2]["credit"].endswith("Claude Opus 5.5 + Vega-Lite")
-    assert [img["provider"] for img in project["images"][:3]] == ["claude-scene", "claude-svg", "vega-lite"]
+    assert [img["provider"] for img in project["images"][:3]] == ["claude-scene", "claude-diagram", "vega-lite"]
     # The meme came from its room: six pitches, three drawn finalists to choose from, and three ideas left.
     meme = project["images"][3]
     assert meme["provider"] in ("claude-meme", "vega-lite")
@@ -552,8 +552,9 @@ def test_brand_kit_and_edit_image(client: TestClient, sample_docx: bytes, fake_l
     fake_llm.calls.clear()
     job = client.post(f"/api/images/{diagram['id']}/edit", json={"instruction": "Make the box orange"}).json()
     assert job["status"] == "succeeded", job
-    call = next(c for c in fake_llm.calls if c["task"] == "diagram image edit")
-    assert "Make the box orange" in call["prompt"] and "<svg" in call["prompt"]
+    # The diagram is a code template, so the edit changes its filled-in content, not SVG.
+    call = next(c for c in fake_llm.calls if c["task"] == "diagram design")
+    assert "Make the box orange" in call["prompt"] and '"template":"pipeline"' in call["prompt"]
     edited = next(i for i in client.get(f"/api/projects/{project['id']}").json()["images"] if i["id"] == diagram["id"])
     assert len(edited["history"]) == 2 and edited["url"] != diagram["url"]
 
@@ -569,7 +570,8 @@ def test_redraw_all_images_uses_the_new_brand_kit(client: TestClient, sample_doc
     # Every image is redrawn from the idea on show: no new pitching or judging, and the meme keeps its joke (code draws it).
     tasks = fake_llm.tasks()
     assert not {"opening ideas", "meme ideas", "diagram image ideas", "image sheet judge"} & set(tasks)
-    assert len(designs) == 3 and all("risograph print" in c["prompt"] for c in designs)
+    # The diagram is a code template filled again (its colors come from the brand palette); the rest are redesigned.
+    assert len(designs) == 2 and all("risograph print" in c["prompt"] for c in designs) and "diagram design" in tasks
     after = client.get(url).json()["images"]
     assert all(len(i["history"]) == 2 for i in after)
 
@@ -661,7 +663,7 @@ def test_an_image_that_cannot_be_drawn_gets_one_more_try(client: TestClient, sam
     assert {img["kind"]: img["status"] for img in project["images"]}["diagram"] == "ready"
     diagrams = [c for c in fake_llm.calls if c["task"] == "diagram image design"]
     # Three ideas are drawn at once; the broken one is asked again with the error quoted.
-    assert len(diagrams) == 4 and any("must be an <svg> document" in d["prompt"] for d in diagrams)
+    assert len(diagrams) == 3 and any("must be an <svg> document" in d["prompt"] for d in diagrams)
     # Each drawing is told what the rest of the set shows.
     assert "The other images in this post" in diagrams[0]["prompt"] and "- hero `hero`:" in diagrams[0]["prompt"]
 

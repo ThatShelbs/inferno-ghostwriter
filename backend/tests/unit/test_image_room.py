@@ -217,7 +217,9 @@ async def test_an_in_body_image_gets_ideas_candidates_and_finalists() -> None:
     assert len(ideas["concepts"]) == 4 and all(c["kind"] == "diagram" for c in ideas["concepts"])
     drawn, index = await room.run(ideas, body_context(), None)
     assert index == 0 and len(drawn.finalists) == 3 and ideas["tried"] == [0, 1, 2]
-    assert llm.tasks().count("diagram image design") == 3 and "image sheet judge" in llm.tasks()
+    # The first idea fills a code diagram template; the other two are drawn freehand.
+    assert llm.tasks().count("diagram image design") == 2 and llm.tasks().count("diagram design") == 1
+    assert drawn.provider == "claude-diagram" and "image sheet judge" in llm.tasks()
 
 
 # -- story: anchors, angle cards, references -------------------------------------------------------------------------

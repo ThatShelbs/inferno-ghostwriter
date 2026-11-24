@@ -448,6 +448,21 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
         return pitch_ranking_payload(prompt)
     if name == "SheetVerdict":
         return sheet_verdict_payload(prompt)
+    if name == "DiagramDesign":
+        return {
+            "diagram": {
+                "template": "pipeline",
+                "alt": "Four steps before a model ships: eval, guardrails, monitor, rollback.",
+                "steps": [
+                    {"label": "Eval", "note": "Score it on held-out data"},
+                    {"label": "Guardrails", "note": "Block the worst outputs"},
+                    {"label": "Monitor", "note": "Watch drift every day"},
+                    {"label": "Rollback", "note": "One click back"},
+                ],
+                "highlight": 2,
+            },
+            "caption": "The pre-launch loop",
+        }
     if name == "BodyIdeas":
         return body_ideas_payload(prompt)
     if name == "MemeStagingEdit":
@@ -1036,6 +1051,8 @@ def body_ideas_payload(prompt: str) -> dict[str, Any]:
                 "reader_takeaway": "At a glance a reader sees the steps and understands the order.",
                 "anchor": "",
                 "figures": "none",
+                # The first diagram idea uses a code template, the rest are drawn freehand.
+                "template": "pipeline" if i == 0 and (kind.group(1) if kind else "diagram") == "diagram" else "",
             }
             for i in range(int(count.group(1)) if count else 4)
         ]

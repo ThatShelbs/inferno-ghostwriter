@@ -640,6 +640,9 @@ class ImageService:
         if image.kind == "meme":  # an older meme: plain SVG with captions on top
             meme, _ = await self._legacy_meme(prompt, usage)
             return self._result(image, meme, persona)
+        if image.provider == "claude-diagram":
+            scheme_ = self._post_scheme(image.project_id, brand_palette(brand_kit))
+            return self._result(image, await self.body.edit_diagram(image.spec, instruction, scheme_, usage), persona)
         kind = "chart" if image.provider == "vega-lite" else image.kind
         drawn = await self.body.design(kind, prompt, task=f"{image.kind} image edit", palette=brand_palette(brand_kit), usage=usage)
         return self._result(image, drawn, persona)

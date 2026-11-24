@@ -16,4 +16,7 @@ $context
 
 $cards
 $exclude
+Diagram templates (code draws these cleanly in the author's style; for a `diagram` idea set `template` to one that fits, or '' only when none does):
+$templates
+
 Pitch exactly $count distinct ideas, each a genuinely different way to make this point land: a different structure (flow, layers, nested rings, matrix, before/after, a chart of the real numbers, a visual metaphor), not the same diagram restyled. For each, give the `kind`, the `hook` (what it adds for the reader), the `concept` concretely enough to draw (layout, elements, the exact short labels or data from the post), the `reader_takeaway`, the `anchor` (5-15 words copied exactly from the text around it) and `figures` ('simple' only when a person makes the idea clearer). Best idea first. Clean, uncluttered pictures that read at a glance beat busy ones.
