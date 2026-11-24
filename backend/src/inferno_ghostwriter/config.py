@@ -13,6 +13,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from inferno_ghostwriter.legacy import adopt_legacy_env, move_legacy_app_folder
@@ -36,6 +37,18 @@ else:
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 # "api": Anthropic API (Console credits). "subscription": the user's Claude Pro/Max plan via Claude Code.
 Connection = Literal["api", "subscription"]
+SecondaryProvider = Literal["codex", "gemini"]
+WritingProvider = Literal["claude", "codex", "gemini"]
+
+
+class SecondarySettings(BaseModel):
+    draft: WritingProvider = "claude"
+    critique: WritingProvider = "claude"
+    revision: WritingProvider = "claude"
+    tweak: WritingProvider = "claude"
+    fallback: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
+    judges: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
+    ideation: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
 
 
 class Settings(BaseSettings):
@@ -57,6 +70,7 @@ class Settings(BaseSettings):
     claude_connection: Connection = "api"
     model: str = "claude-opus-5-5"
     use_fallbacks: bool = True
+    secondary: SecondarySettings = Field(default_factory=SecondarySettings)
     effort_analyze: Effort = "low"
     effort_research: Effort = "medium"
     effort_synthesize: Effort = "high"

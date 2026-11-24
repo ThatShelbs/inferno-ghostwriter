@@ -18,7 +18,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from inferno_ghostwriter import demo_showcase as showcase
-from inferno_ghostwriter.llm.base import Citation, OnDelta, ResearchResult, SystemBlock, UsageSink
+from inferno_ghostwriter.llm.base import Citation, OnDelta, OnReset, ResearchResult, SystemBlock, UsageSink
 
 VOICE_PROFILE = """# Voice Profile: Test Persona
 
@@ -132,6 +132,7 @@ class FakeLLM:
         max_tokens: int = 64000,
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
+        on_reset: OnReset | None = None,
     ) -> str:
         self.calls.append({"kind": "text", "task": task, "prompt": prompt, "system": system})
         if task == "voice profile synthesis":

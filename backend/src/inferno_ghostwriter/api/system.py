@@ -7,7 +7,7 @@ import dataclasses
 from typing import Any
 
 import anthropic
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from sqlmodel import Session, col, select
 
 from inferno_ghostwriter import __version__
@@ -19,14 +19,17 @@ from inferno_ghostwriter.api.schemas import (
     DetectorStatusOut,
     Health,
     JobOut,
+    SecondaryStatusOut,
     SettingsIn,
     SettingsOut,
 )
 from inferno_ghostwriter.authenticity import local_detector
+from inferno_ghostwriter.config import SecondaryProvider, SecondarySettings
 from inferno_ghostwriter.db import Job
 from inferno_ghostwriter.images import model_label
 from inferno_ghostwriter.jobs import JobContext
-from inferno_ghostwriter.llm import LLMNotConfiguredError
+from inferno_ghostwriter.llm import LLMError, LLMNotConfiguredError
+from inferno_ghostwriter.llm.secondary import INSTALL_URLS
 from inferno_ghostwriter.services import RUNTIME_SETTINGS
 
 router = APIRouter(prefix="/api")
@@ -118,12 +121,59 @@ async def test_auth(services: ServicesDep) -> AuthTestOut:
 # -- settings ----------------------------------------------------------------------
 
 
+@router.get("/auth/secondary", response_model=list[SecondaryStatusOut])
+async def secondary_status(services: ServicesDep) -> list[SecondaryStatusOut]:
+    return [
+        SecondaryStatusOut(
+            provider=provider,
+            model=cli.label,
+            install_url=INSTALL_URLS[provider],
+            installed=cli.command is not None,
+            signed_in=await cli.signed_in(),
+            login_in_progress=cli.signing_in,
+        )
+        for provider, cli in services.secondary.items()
+    ]
+
+
+def _require_local_json(request: Request, services: ServicesDep) -> None:
+    if services.settings.demo:
+        raise HTTPException(409, "Secondary models are disabled in demo mode.")
+    loopback = {"127.0.0.1", "::1", "::ffff:127.0.0.1"}
+    if request.client is None or request.client.host not in loopback or request.url.hostname not in (loopback | {"localhost"}):
+        raise HTTPException(409, "Secondary sign-in is available on a local installation.")
+    if request.headers.get("content-type", "").split(";", 1)[0] != "application/json":
+        raise HTTPException(415, "Send a JSON request from Settings.")
+
+
+@router.post("/auth/secondary/{provider}/login", response_model=AuthTestOut)
+def secondary_login(provider: SecondaryProvider, request: Request, services: ServicesDep) -> AuthTestOut:
+    _require_local_json(request, services)
+    try:
+        services.secondary[provider].start_login()
+    except LLMError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    return AuthTestOut(ok=True, message="Finish sign-in in the provider window, then test your connection here.")
+
+
+@router.post("/auth/secondary/{provider}/test", response_model=AuthTestOut)
+async def test_secondary(provider: SecondaryProvider, request: Request, services: ServicesDep) -> AuthTestOut:
+    _require_local_json(request, services)
+    cli = services.secondary[provider]
+    try:
+        await cli.test()
+    except LLMError as exc:
+        return AuthTestOut(ok=False, message=str(exc))
+    return AuthTestOut(ok=True, message=f"Connected and verified with {cli.label}.")
+
+
 def _settings_out(services: ServicesDep) -> SettingsOut:
     s = services.settings
     return SettingsOut(
         claude_connection=s.claude_connection,
         model=s.model,
         use_fallbacks=s.use_fallbacks,
+        secondary=s.secondary,
         revision_passes=s.revision_passes,
         ai_detection=s.ai_detection,
         detector_models=local_detector.selected_models(s),
@@ -149,6 +199,8 @@ def update_settings(body: SettingsIn, services: ServicesDep) -> SettingsOut:
         value = getattr(body, key)
         if value is None:
             continue
+        if isinstance(value, SecondarySettings):
+            value = services.settings.secondary.model_copy(update=value.model_dump(exclude_unset=True))
         if key == "detector_models":
             unknown = sorted(set(value) - set(local_detector.BY_ID))
             if unknown:

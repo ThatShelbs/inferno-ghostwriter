@@ -394,6 +394,9 @@ async def write_post(
     async def stream_delta(text: str) -> None:
         await reporter.emit("draft_delta", {"text": text})
 
+    async def reset_preview() -> None:
+        await reporter.emit("draft_reset", {})
+
     placeholders = ", ".join(f"`{{{{image:{s.slot_id}}}}}` ({s.kind}: {s.purpose})" for s in slots)
     draft = await llm.text(
         task="draft",
@@ -416,6 +419,7 @@ async def write_post(
         ),
         effort=settings.effort_draft,
         on_delta=stream_delta,
+        on_reset=reset_preview,
         usage=reporter.add_usage,
     )
     # A placeholder the writer added for an example becomes a real slot instead of being dropped.
@@ -459,6 +463,7 @@ async def write_post(
                 prompt=render("revise", draft=draft, critique=json.dumps(critique.model_dump(), indent=1)),
                 effort=settings.effort_draft,
                 on_delta=stream_delta,
+                on_reset=reset_preview,
                 usage=reporter.add_usage,
             )
             draft, slots = add_example_slots(draft, slots, fill_dangling=False)

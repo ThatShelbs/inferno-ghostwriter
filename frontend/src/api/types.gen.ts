@@ -1048,6 +1048,25 @@ export interface SampleWritingOut {
   author: string;
 }
 
+export interface SecondarySettings {
+  draft?: "claude" | "codex" | "gemini";
+  critique?: "claude" | "codex" | "gemini";
+  revision?: "claude" | "codex" | "gemini";
+  tweak?: "claude" | "codex" | "gemini";
+  fallback?: ("codex" | "gemini")[];
+  judges?: ("codex" | "gemini")[];
+  ideation?: ("codex" | "gemini")[];
+}
+
+export interface SecondaryStatusOut {
+  provider: "codex" | "gemini";
+  model: string;
+  install_url: string;
+  installed: boolean;
+  signed_in: boolean;
+  login_in_progress: boolean;
+}
+
 export interface SeedSamplesOut {
   available: boolean;
   directory: string;
@@ -1058,6 +1077,7 @@ export interface SettingsIn {
   claude_connection?: "api" | "subscription" | null;
   model?: string | null;
   use_fallbacks?: boolean | null;
+  secondary?: SecondarySettings | null;
   revision_passes?: number | null;
   ai_detection?: boolean | null;
   detector_models?: string[] | null;
@@ -1070,6 +1090,7 @@ export interface SettingsOut {
   claude_connection: "api" | "subscription";
   model: string;
   use_fallbacks: boolean;
+  secondary: SecondarySettings;
   revision_passes: number;
   ai_detection: boolean;
   detector_models: string[];

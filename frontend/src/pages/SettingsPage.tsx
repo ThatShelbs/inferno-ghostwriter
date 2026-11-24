@@ -6,6 +6,7 @@ import { ClaudeConnect, ImagesCard } from '../components/Connections'
 import { Button, Card, Dialog, Field, Input, Notice, PageHeader, Select, Switch } from '../components/ui'
 import { cx } from '../lib/cx'
 import { useTheme, type ThemeMode } from '../theme/useTheme'
+import { SecondaryModelsCard } from './SecondaryModelsCard'
 
 const MODELS = [
   ['claude-opus-5-5', 'Claude Opus 5.5 (default: best writing)'],
@@ -110,7 +111,7 @@ function AdvancedCard() {
         <p>
           <span className="font-semibold">Your data folder:</span> <code className="break-all">{settings.data_dir}</code>
         </p>
-        <p className="mt-1 text-muted">Samples, voice profiles, posts and images stay on this computer. Version {settings.version}.</p>
+        <p className="mt-1 text-muted">Samples, voice profiles, posts and images are stored on this computer. Version {settings.version}.</p>
       </div>
     </Card>
   )
@@ -215,6 +216,7 @@ export function SettingsPage() {
       <div className="grid gap-6 xl:grid-cols-2">
         <div className="space-y-6">
           <ClaudeConnect />
+          <SecondaryModelsCard />
           <ImagesCard />
           <HumanizeCard />
         </div>

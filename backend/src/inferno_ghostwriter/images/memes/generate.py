@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, draw_with_retry, thumbnail_png
+from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.judge import Ranking, judge_sheet, rank_pitches
 from inferno_ghostwriter.images.memes.compose import compose, scheme_for
 from inferno_ghostwriter.images.memes.formats import FALLBACK, FAMILIES, MemeFormat, build_spec, get_format, menu
@@ -620,6 +620,20 @@ class MemeMaker:
         concepts = [c.model_copy(update={"format": only}) for c in ideas.concepts] if only else list(ideas.concepts)
         if not concepts:
             raise ImageProviderError("Claude did not pitch any meme ideas. Click New idea to try again.")
+        if self.settings.secondary.ideation:
+            used = {c.premise.strip().casefold() for c in concepts}
+            pitch = (
+                prompt + "\n\nFor this guest round pitch two alternative jokes. Keep the format constraint if present. "
+                "Avoid these existing premises:\n" + "\n".join(f"- {c.premise}" for c in concepts)
+            )
+            for guest in await guest_pitches(
+                self.llm, self.settings, task="meme ideas", system=self.system, prompt=pitch, schema=MemeIdeas, usage=usage
+            ):
+                for concept in guest.concepts[:2]:
+                    key = concept.premise.strip().casefold()
+                    if key and key not in used and get_format(only or concept.format):
+                        used.add(key)
+                        concepts.append(concept.model_copy(update={"format": only}) if only else concept)
         state: dict[str, Any] = {"version": STATE_VERSION, "brief": post.brief, "tried": [], "seed": seed}
         ranking_ = await rank_pitches(
             self.llm, self.settings, context=self._context(post), candidates=self._pitch_lines(concepts), punch_up=True, usage=usage

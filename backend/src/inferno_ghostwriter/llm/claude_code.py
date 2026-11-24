@@ -36,8 +36,10 @@ from inferno_ghostwriter.llm.base import (
     Citation,
     LLMError,
     LLMImagesUnsupportedError,
+    LLMLimitError,
     LLMRefusalError,
     OnDelta,
+    OnReset,
     ResearchResult,
     SystemBlock,
     T,
@@ -233,6 +235,7 @@ class ClaudeCodeLLM:
         max_tokens: int = 64000,
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
+        on_reset: OnReset | None = None,
     ) -> str:
         result = await self._call(task, system, prompt, effort, ["--tools", "", "--max-turns", "1"], on_delta)
         _record(result, usage)
@@ -347,6 +350,8 @@ class ClaudeCodeLLM:
                 raise
 
         if result is None:
+            if (limit or {}).get("status") == "rejected":
+                raise _usage_limit(limit)
             detail = stderr.strip().splitlines()[-1] if stderr.strip() else f"exit code {code}"
             raise LLMError(f"Claude Code stopped during {task} without a result ({detail}).")
         _check(result, limit, task)
@@ -432,14 +437,18 @@ def _check(result: dict[str, Any], limit: dict[str, Any] | None, task: str) -> N
     status = result.get("api_error_status")
     lowered = message.lower()
     if status == 429 or "usage limit" in lowered or "rate limit" in lowered or (limit or {}).get("status") == "rejected":
-        resets = (limit or {}).get("resetsAt")
-        when = f" It resets at {datetime.fromtimestamp(resets).strftime('%I:%M %p').lstrip('0')}." if resets else ""
-        raise LLMError(
-            f"Your Claude plan's usage limit is reached.{when} Wait for it to reset, or switch to the Anthropic API in Settings."
-        )
+        raise _usage_limit(limit)
     if status in (401, 403) or "/login" in lowered or "not logged in" in lowered or "log in" in lowered:
         raise LLMError("Claude Code is not signed in to your Claude account. Open Settings and choose 'Sign in with Claude'.")
     raise LLMError(f"Claude Code failed during {task}: {message}")
+
+
+def _usage_limit(limit: dict[str, Any] | None) -> LLMLimitError:
+    resets = (limit or {}).get("resetsAt")
+    when = f" It resets at {datetime.fromtimestamp(resets).strftime('%I:%M %p').lstrip('0')}." if resets else ""
+    return LLMLimitError(
+        f"Your Claude plan's usage limit is reached.{when} Wait for it to reset, or switch to the Anthropic API in Settings."
+    )
 
 
 def _parse_structured(result: dict[str, Any], schema: type[T], task: str) -> T:

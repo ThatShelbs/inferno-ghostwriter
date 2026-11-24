@@ -58,6 +58,7 @@ import type {
   SampleTextIn,
   SampleWritingOut,
   SeedSamplesOut,
+  SecondaryStatusOut,
   SettingsIn,
   SettingsOut,
   SurpriseOut,
@@ -70,6 +71,7 @@ import type {
 export const keys = {
   health: ['health'] as const,
   auth: ['auth'] as const,
+  secondaryAuth: ['secondary-auth'] as const,
   settings: ['settings'] as const,
   detector: ['detector'] as const,
   personas: ['personas'] as const,
@@ -127,6 +129,25 @@ export function useAuthActions() {
 }
 
 export const useSettings = () => useQuery({ queryKey: keys.settings, queryFn: () => api.get<SettingsOut>('/api/settings') })
+
+export function useSecondaryStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: keys.secondaryAuth,
+    queryFn: () => api.get<SecondaryStatusOut[]>('/api/auth/secondary'),
+    enabled,
+    refetchInterval: (query) => (query.state.data?.some((provider) => provider.login_in_progress) ? 2000 : false),
+  })
+}
+
+export function useSecondaryAuth(provider: SecondaryStatusOut['provider']) {
+  const qc = useQueryClient()
+  const refresh = () => qc.invalidateQueries({ queryKey: keys.secondaryAuth })
+  const path = `/api/auth/secondary/${provider}`
+  return {
+    login: useMutation({ mutationFn: () => api.post<AuthTestOut>(`${path}/login`), onSettled: refresh }),
+    test: useMutation({ mutationFn: () => api.post<AuthTestOut>(`${path}/test`), onSettled: refresh }),
+  }
+}
 
 export function useUpdateSettings() {
   const qc = useQueryClient()
