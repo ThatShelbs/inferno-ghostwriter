@@ -610,6 +610,7 @@ export interface ImageRouting {
   svg?: "auto" | "claude" | "codex" | "gemini";
   judge?: "auto" | "claude" | "codex" | "gemini";
   raster?: boolean;
+  native_share?: number;
 }
 
 export interface ImageUpdate {

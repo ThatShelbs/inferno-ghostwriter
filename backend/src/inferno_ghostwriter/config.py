@@ -54,8 +54,12 @@ class ImageRouting(BaseModel):
     design: ImageRoute = "auto"
     svg: ImageRoute = "auto"
     judge: ImageRoute = "auto"
-    # GPT's own image generation adds a painted candidate for openings and illustrations (Codex only).
+    # Master switch for GPT's own image generation (Codex only).
     raster: bool = True
+    # With GPT signed in and ``raster`` on, this share of the eligible images (openers' visual metaphors and
+    # illustrations) is generated natively by GPT instead of drawn by Claude; the rest stay Claude's. Chosen per
+    # slot by a stable hash, never both ways for one slot. 0 = never, 1 = every eligible image.
+    native_share: float = Field(default=0.5, ge=0, le=1)
 
 
 class SecondarySettings(BaseModel):
