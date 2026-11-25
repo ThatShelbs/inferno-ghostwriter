@@ -9,8 +9,16 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 - **Picking a meme format no longer fails with "FileNotFoundError".** With a Claude subscription, a Claude Code process that could not start (for example after it updated itself) crashed the whole image instead of just one judge. It is now a plain "Could not start Claude Code" error, a failed judge simply sits out, and unexpected image errors say where they happened.
 - **Redraw and Remix keep your edits.** After you changed an image with **Edit**, Redraw and Remix went back to the original idea. They now build on the edited picture (illustrations, diagrams, charts, the opening image and memes) and only change the look; *New idea* still starts fresh.
 
+### Changed
+
+- **A post with images uses far less of your Claude plan.** With ChatGPT (Codex) or Gemini signed in, image work now goes to the model that suits it on **Auto**: image ideas, charts and diagram fills to ChatGPT or Gemini, the picture judge to ChatGPT, hand-drawn SVG to Claude, with Claude as the fallback. Pin any of them in *Settings → Optional models → Image work*.
+- **Fewer, better candidates.** The opener builds its three best ideas in different styles instead of six, an in-body image draws two, and only a weak winner gets another pass. A meme is still drawn six ways for free. *Settings → Image candidates → Max quality* brings back the wide room.
+- **Leaner prompts.** Image prompts carry the whole post condensed (every section, each paragraph's opening sentences) instead of the first pages, the meme menu is shorter, and broken SVG references are repaired in code instead of costing a second design.
+- **Credits name the model that made each image.** Every job also records calls and tokens per model, and `backend/scripts/usage_report.py` measures a post's calls for free.
+
 ### Added
 
+- **ChatGPT can paint a rival picture.** With ChatGPT signed in, its own image generation paints one candidate for the opening image and for each illustration, judged side by side with the drawn ones. Paintings have no words in them and can be redrawn, remixed and edited by instruction like any other image. Turn it off under *Image work*.
 - **Every image, rebuilt for quality: pick from three finalists.** The opening image, the closing meme and every diagram, chart, illustration and screenshot in between are now made the same way. See [docs/images.md](docs/images.md).
   - **Ideas tied to the story.** Claude pitches several ideas for each image, and every idea quotes the passage of your post it serves; an idea that misquotes the post ranks last. A fresh deal of "angle cards" each time means two runs on the same post pitch different ideas.
   - **A judge that looks at the pictures.** Up to six candidates are drawn (three for an image inside the post), and one judge looks at them side by side, says what each one reads as to a stranger and names one fix. The best three get their fix and become **finalists**: swap between them on the card for free, with no wait.

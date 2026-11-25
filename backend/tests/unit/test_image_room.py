@@ -113,7 +113,13 @@ async def test_the_judges_favourite_wins_and_its_fix_is_applied_by_restaging() -
     meme = await MemeMaker(llm, Settings()).make("", POST, ART)
     state = load_state(meme.spec)
     assert state and state["chosen"] == 2 and meme.score == 9
-    assert "Shorter words" in next(c for c in llm.calls if c["task"].startswith("meme edit"))["prompt"]
+    # A winner that already scores 9 is shown as drawn: no restage call.
+    assert not any(c["task"].startswith("meme edit") for c in llm.calls)
+    llm = FixingLLM()
+    await MemeMaker(llm, Settings(image_refine_below=10)).make("", POST, ART)
+    restages = [c for c in llm.calls if c["task"].startswith("meme edit")]
+    # Only the winner may be refined (and only when its format is staged), never the runners-up.
+    assert len(restages) <= 1 and all("Shorter words" in c["prompt"] for c in restages)
 
 
 async def test_without_eyes_the_pitch_order_stands_and_finalists_are_still_offered() -> None:
@@ -216,10 +222,47 @@ async def test_an_in_body_image_gets_ideas_candidates_and_finalists() -> None:
     ideas = await room.pitch(body_context(), [], None)
     assert len(ideas["concepts"]) == 4 and all(c["kind"] == "diagram" for c in ideas["concepts"])
     drawn, index = await room.run(ideas, body_context(), None)
-    assert index == 0 and len(drawn.finalists) == 3 and ideas["tried"] == [0, 1, 2]
-    # The first idea fills a code diagram template; the other two are drawn freehand.
-    assert llm.tasks().count("diagram image design") == 2 and llm.tasks().count("diagram design") == 1
+    assert index == 0 and len(drawn.finalists) == 2 and ideas["tried"] == [0, 1]
+    # The first idea fills a code diagram template; the second is drawn freehand.
+    assert llm.tasks().count("diagram image design") == 1 and llm.tasks().count("diagram design") == 1
     assert drawn.provider == "claude-diagram" and "image sheet judge" in llm.tasks()
+
+
+async def test_gpt_paints_a_rival_for_illustrations_and_openers_only_when_painting_is_on() -> None:
+    llm = FakeLLM()
+    room = BodyRoom(llm, Settings())
+    ctx = body_context(kind="illustration")
+    ideas = await room.pitch(ctx, [], None)
+    await room.run(ideas, ctx, None)
+    assert "raster image" not in llm.tasks()  # off unless the author's GPT can paint
+
+    llm = FakeLLM()
+    llm.painter = True
+    room = BodyRoom(llm, Settings())
+    ideas = await room.pitch(ctx, [], None)
+    drawn, _ = await room.run(ideas, ctx, None)
+    painted = [d for d in drawn.finalists if d.provider == "gpt-image"]
+    assert llm.tasks().count("raster image") == 1 and painted and (painted[0].width, painted[0].height) == (1600, 900)
+    paint_prompt = next(c["prompt"] for c in llm.calls if c["task"] == "raster image")
+    assert "no" in paint_prompt.lower() and "words" in paint_prompt and "ghost" in paint_prompt
+    # An edit of a painting paints again from its stored prompt, shown the current picture.
+    edited = await room.repaint(painted[0].spec, "make it night", painted[0].png, None)
+    assert edited.provider == "gpt-image" and llm.calls[-1]["images"] == 1 and "make it night" in llm.calls[-1]["prompt"]
+    # Diagrams are never painted.
+    llm.calls.clear()
+    ideas = await room.pitch(body_context(), [], None)
+    await room.run(ideas, body_context(), None)
+    assert "raster image" not in llm.tasks()
+
+    llm = FakeLLM()
+    llm.painter = True
+    opening = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
+    result = await opening.make("", opening_context(), ART)
+    state = load_opening_state(result.spec)
+    assert state is not None and llm.tasks().count("raster image") == 1
+    assert len(state["review"]["candidates"]) == 4  # three built + one painted
+    if result.provider == "gpt-image":
+        assert state["medium"] == "raster" and state["prompt"]
 
 
 # -- story: anchors, angle cards, references -------------------------------------------------------------------------

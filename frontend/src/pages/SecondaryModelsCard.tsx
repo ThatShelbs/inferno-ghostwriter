@@ -11,6 +11,13 @@ const STAGES = [
   ['revision', 'Voice revision'],
   ['tweak', 'Tweaks and selected passages'],
 ] as const
+const IMAGE_WORK = [
+  ['pitch', 'Image ideas (pitches)'],
+  ['design', 'Charts, diagrams and layouts'],
+  ['svg', 'Hand-drawn SVG illustrations'],
+  ['judge', 'Picture judge'],
+] as const
+type ImageWork = (typeof IMAGE_WORK)[number][0]
 const USES = [
   ['fallback', 'Use when Claude reaches a usage limit'],
   ['judges', 'Add a judge for image and meme pitches'],
@@ -104,11 +111,44 @@ export function SecondaryModelsCard() {
               </Field>
             ))}
           </fieldset>
+          <fieldset className="grid gap-3 sm:grid-cols-2" disabled={update.isPending}>
+            <legend className="mb-2 font-semibold">Image work</legend>
+            <p className="text-sm text-muted sm:col-span-2">
+              Auto sends each kind of image work to the signed-in model that suits it and falls back to Claude: ideas and charts to ChatGPT or Gemini, the
+              picture judge to ChatGPT, hand-drawn SVG to Claude. This saves most of a post&apos;s Claude usage.
+            </p>
+            {IMAGE_WORK.map(([work, label]) => (
+              <Field key={work} label={label} htmlFor={`image-${work}`}>
+                <Select
+                  id={`image-${work}`}
+                  value={selected.images?.[work as ImageWork] ?? 'auto'}
+                  onChange={(event) => save({ images: { [work]: event.target.value } } as Partial<SecondarySettings>)}
+                >
+                  <option value="auto">Auto (best fit)</option>
+                  <option value="claude">Claude</option>
+                  {providers
+                    .filter((status) => work !== 'judge' || status.provider === 'codex')
+                    .map((status) => (
+                      <option key={status.provider} value={status.provider} disabled={!status.signed_in}>
+                        {status.model}
+                      </option>
+                    ))}
+                </Select>
+              </Field>
+            ))}
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input
+                type="checkbox"
+                className="accent-[var(--app-accent)]"
+                checked={selected.images?.raster ?? true}
+                onChange={(event) => save({ images: { raster: event.target.checked } } as Partial<SecondarySettings>)}
+              />
+              Let ChatGPT paint a rival picture for openers and illustrations (the judge picks between painted and drawn)
+            </label>
+          </fieldset>
           <fieldset className="space-y-3" disabled={update.isPending}>
             <legend className="font-semibold">Additional uses</legend>
-            <p className="text-sm text-muted">
-              Fallbacks run in the order you enable them. Codex can also review rendered images. Claude renders images and handles web research.
-            </p>
+            <p className="text-sm text-muted">Fallbacks run in the order you enable them. Claude handles web research.</p>
             {USES.map(([use, label]) => (
               <div key={use} className="space-y-1">
                 <p id={`secondary-${use}`} className="text-sm font-medium">

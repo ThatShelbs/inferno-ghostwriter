@@ -40,6 +40,39 @@ def anchored(anchor: str, markdown: str) -> bool:
     return quote in _norm(markdown)
 
 
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'(\[*`])")
+_CODE_BLOCK = re.compile(r"```(\w*)\n(.*?)```", re.DOTALL)
+
+
+def condense(markdown: str, limit: int) -> str:
+    """The whole post shortened to ``limit`` characters by code, with no model call.
+
+    Headings stay; code blocks and tables become one-line notes; each paragraph keeps its opening sentences,
+    fewer of them the longer the post. Every kept sentence is the post's own text, so a pitch may still quote
+    an anchor from it. A post that already fits comes back unchanged.
+    """
+    text = PLACEHOLDER_RE.sub("", markdown).strip()
+    if len(text) <= limit:
+        return text
+    text = _CODE_BLOCK.sub(lambda m: f"[code block{f' ({m.group(1)})' if m.group(1) else ''}: {m.group(2).count(chr(10))} lines]", text)
+    blocks = [b.strip() for b in re.split(r"\n\s*\n", text) if b.strip()]
+
+    def shorten(block: str, keep: int) -> str:
+        if block.startswith(("#", "[code block")):
+            return block
+        if block.startswith("|"):
+            return f"[table: {block.count(chr(10)) + 1} rows]"
+        sentences = _SENTENCE_END.split(" ".join(block.split()))
+        return " ".join(sentences[:keep]) + (" ..." if len(sentences) > keep else "")
+
+    out = text
+    for keep in (3, 2, 1):
+        out = "\n\n".join(shorten(b, keep) for b in blocks)
+        if len(out) <= limit:
+            return out
+    return out[:limit].rsplit(" ", 1)[0] + "\n\n[... more of the post is omitted ...]"
+
+
 def moments(markdown: str, count: int, rng: random.Random, *, max_chars: int = 320) -> list[str]:
     """``count`` passages sampled from the post's body paragraphs (not headings, code or image lines)."""
     body = PLACEHOLDER_RE.sub("", markdown)

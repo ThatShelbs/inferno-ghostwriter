@@ -108,8 +108,8 @@ def test_every_staged_format_declares_its_signature_and_renders_without_art() ->
 def test_a_long_post_keeps_its_ending_for_the_writers_room() -> None:
     post = "Opening line. " + "middle " * 6000 + "The pie stops itself."
     clipped = clip_post(post + "\n\n{{image:meme}}")
-    assert len(clipped) < 24200 and clipped.startswith("Opening line.") and clipped.endswith("The pie stops itself.")
-    assert "middle of the post is omitted" in clipped and "{{image" not in clipped
+    assert len(clipped) < 10200 and clipped.startswith("Opening line.") and clipped.endswith("The pie stops itself.")
+    assert "the ending, word for word" in clipped and "{{image" not in clipped
     assert clip_post("Short post.") == "Short post."
 
 

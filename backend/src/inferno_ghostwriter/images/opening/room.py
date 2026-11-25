@@ -32,10 +32,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
+from inferno_ghostwriter.images import raster
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
-from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
+from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches, to_refine
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker, MemeResult
 from inferno_ghostwriter.images.memes.generate import clip_post
@@ -68,7 +69,7 @@ FIXED_COUNT = 4
 VETO = 5
 # Concepts tried before falling back to a visual metaphor drawn from scratch.
 MAX_BUILDS = 3
-POST_LIMIT = 16000
+POST_LIMIT = 8000
 JUDGES = ("scroller", "art_director", "fact_checker", "author")
 NOT_AN_OPENING = "This image was made before opening styles existed; click New idea to pitch openings for it."
 
@@ -152,6 +153,10 @@ class OpeningContext:
 OpeningResult = Drawn
 
 
+async def _nothing() -> None:
+    return None
+
+
 @dataclass
 class _Built:
     png: bytes
@@ -228,6 +233,25 @@ def _style_menu(ids: list[str]) -> str:
         s = BY_ID[style_id]
         lines.append(f"- `{s.id}` ({s.label}): {s.when_to_use}")
     return "\n".join(lines)
+
+
+def pick_builds(concepts: list[dict[str, Any]], order: list[int], count: int) -> list[int]:
+    """The concepts worth building, best first: one per style before a second of any (so the judge compares
+    different kinds of picture), never one ruled out while others remain, and at most one meme. A meme is a whole
+    writers' room of its own (the costliest build), so it is built only when the ranking put it first."""
+    pool = [i for i in order if not ruled_out(concepts[i])] or order
+    pool = [i for k, i in enumerate(pool) if k == 0 or concepts[i].get("style") != "meme"] or pool
+    picks: list[int] = []
+    for distinct in (True, False):
+        for i in pool:
+            if len(picks) >= count:
+                return picks
+            style = concepts[i].get("style")
+            taken = [concepts[j].get("style") for j in picks]
+            if i in picks or (style == "meme" and "meme" in taken) or (distinct and style in taken):
+                continue
+            picks.append(i)
+    return picks
 
 
 def _concept_text(concept: OpeningConcept) -> str:
@@ -393,27 +417,26 @@ class OpeningRoom:
     ) -> tuple[int, _Built, list[Drawn]] | None:
         """Build the best concepts at once, let the judge look at the pictures, refine the best and keep them as
         finalists; None if none could be built."""
-        count = max(2, self.settings.image_candidates)
-        # The best concepts, at most one of them a meme (each meme is a whole room of its own).
-        picks: list[int] = []
-        for i in [i for i in order if not ruled_out(state["concepts"][i])] or order:
-            is_meme = state["concepts"][i].get("style") == "meme"
-            if is_meme and any(state["concepts"][j].get("style") == "meme" for j in picks):
-                continue
-            picks.append(i)
-            if len(picks) >= count:
-                break
+        picks = pick_builds(state["concepts"], order, max(2, min(self.settings.image_candidates, self.settings.image_builds)))
         concepts = load_concepts(state)
         scratch = [json.loads(json.dumps(state)) for _ in picks]
-        results = await asyncio.gather(
-            *(self._build(concepts[i], scratch[k], ctx, art, sch, redraw=False, usage=usage) for k, i in enumerate(picks))
+        # GPT paints the best visual metaphor as a rival to the drawn candidates (when painting is on).
+        metaphor = next((i for i in order if concepts[i].style == FALLBACK and not ruled_out(state["concepts"][i])), None)
+        results, painted = await asyncio.gather(
+            asyncio.gather(*(self._build(concepts[i], scratch[k], ctx, art, sch, redraw=False, usage=usage) for k, i in enumerate(picks))),
+            self._paint(concepts[metaphor], ctx, art, sch, usage=usage) if metaphor is not None else _nothing(),
         )
         tried.update(picks)
         options: list[list[Any]] = [[i, b, scratch[k]] for k, (i, b) in enumerate(zip(picks, results, strict=True)) if b is not None]
+        if painted is not None and metaphor is not None:
+            options.append([metaphor, painted, json.loads(json.dumps(state))])
         if not options:
             return None
         keep = max(1, self.settings.image_finalists)
-        labels = [f"[{BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}" for o in options]
+        labels = [
+            f"[{'Painted by GPT' if o[1].provider == raster.PROVIDER else BY_ID[concepts[o[0]].style].label}] {concepts[o[0]].concept}"
+            for o in options
+        ]
         refs, note = self._references([concepts[o[0]].style for o in options], [o[2] for o in options])
         if art.reference is not None:
             refs, note = [*refs, art.reference], (note + "; " if note else "") + "the last one is the author's style reference"
@@ -442,6 +465,20 @@ class OpeningRoom:
                 fix_text = sheet.fixes[k]
                 if not fix_text or concepts[i].style == "meme":  # a meme would need its own room to change
                     return
+                if current.provider == raster.PROVIDER:
+                    repainted = await self._paint(
+                        concepts[i],
+                        ctx,
+                        art,
+                        sch,
+                        prompt=str(current.state.get("prompt") or ""),
+                        note=fix_text,
+                        current=current.png,
+                        usage=usage,
+                    )
+                    if repainted is not None:
+                        options[k][1] = repainted
+                    return
                 fix = (
                     "\nThe judge looked at the finished picture and asked for one change; keep everything else exactly as it "
                     f"is:\n<instruction>\n{fix_text}\n</instruction>\n" + self._current_note(current.state)
@@ -450,7 +487,7 @@ class OpeningRoom:
                 if again is not None:
                     options[k][1] = again
 
-            await asyncio.gather(*(refine(k) for k in ranked))
+            await asyncio.gather(*(refine(k) for k in to_refine(sheet.scores, ranked, self.settings)))
         else:
             ranked = list(range(min(keep, len(options))))
             review = {"skipped": True, "note": "Ranked from the pitches (this connection cannot show Claude pictures)."}
@@ -510,9 +547,16 @@ class OpeningRoom:
         )
 
     async def edit(
-        self, spec: str, instruction: str, ctx: OpeningContext, art: ArtDirection, *, usage: UsageSink | None = None
+        self,
+        spec: str,
+        instruction: str,
+        ctx: OpeningContext,
+        art: ArtDirection,
+        *,
+        usage: UsageSink | None = None,
+        current: bytes | None = None,
     ) -> OpeningResult:
-        """Change the current opening image as the author asks, keeping the rest."""
+        """Change the current opening image as the author asks, keeping the rest (``current``: the picture, for a painting)."""
         state = load_state(spec)
         if state is None or not state.get("style"):
             raise ImageProviderError(NOT_AN_OPENING)
@@ -525,6 +569,22 @@ class OpeningRoom:
             meme = await self.memes.edit(str(state.get("meme") or ""), instruction, art, usage=usage)
             return self._from_meme(state, meme)
         concept = self._chosen_concept(state)
+        if state.get("medium") == "raster":
+            painted = await self._paint(
+                concept,
+                ctx,
+                art,
+                scheme_of(state, art.palette),
+                prompt=str(state.get("prompt") or ""),
+                note=instruction,
+                current=current,
+                usage=usage,
+            )
+            if painted is None:
+                raise ImageProviderError(
+                    "GPT image generation is unavailable. Sign in to Codex in Settings, or Redraw to let Claude draw it."
+                )
+            return self._finish(state, painted)
         if state.get("art") and style.id == "data_art":
             note += f"\nThe current settings to edit:\n<current>\n{json.dumps(state['art'], indent=1)}\n</current>\n"
         elif style.builder == "svg":
@@ -781,6 +841,11 @@ class OpeningRoom:
     ) -> _Built | None:
         style = BY_ID.get(concept.style) or BY_ID[FALLBACK]
         sch = sch or scheme_of(state, art.palette)
+        if redraw and state.get("medium") == "raster" and style.id == FALLBACK:
+            # A painted opener is painted again (with the redraw's twist); Claude draws it only if painting is off.
+            painted = await self._paint(concept, ctx, art, sch, prompt=str(state.get("prompt") or ""), note=variation_for(art), usage=usage)
+            if painted is not None:
+                return painted
         try:
             if style.builder == "meme":
                 previous = str(state.get("meme") or "") if redraw and state.get("style") == "meme" and not meme_format else ""
@@ -797,6 +862,40 @@ class OpeningRoom:
             # errors are not caught: they would fail every concept the same way.
             log.info("Opening %s could not be built: %s", style.id, exc)
             return None
+
+    async def _paint(
+        self,
+        concept: OpeningConcept,
+        ctx: OpeningContext,
+        art: ArtDirection,
+        sch: Scheme,
+        *,
+        prompt: str = "",
+        note: str = "",
+        current: bytes | None = None,
+        usage: UsageSink | None,
+    ) -> _Built | None:
+        """A painted opener from GPT image generation, or None when painting is off or fails. ``prompt`` repaints a
+        stored painting; ``note`` with ``current`` changes that picture, ``note`` alone is a redraw's twist."""
+        base = prompt or raster.prompt_for(
+            f"The opening image and thumbnail of a technical blog post titled '{ctx.title}'. A visual metaphor: {concept.concept}",
+            scheme=sch,
+            palette=art.palette,
+            extra=f"Visual style: {art.visual_style}" if art.visual_style else "",
+        )
+        text, shown = base, [art.reference] if art.reference is not None else None
+        if note.strip() and current is not None:
+            text, shown = (
+                f"{base}\nChange the attached picture as follows and keep everything else exactly as it is: {note.strip()}",
+                [current],
+            )
+        elif note.strip():
+            text = f"{base}\n{note.strip()}"
+        png = await raster.paint(self.llm, text, size=(1600, 900), images=shown, usage=usage)
+        if png is None:
+            return None
+        state = {"style": FALLBACK, "template": "", "svg": None, "build": None, "medium": "raster", "prompt": base}
+        return _Built(png, 1600, 900, raster.PROVIDER, concept.reader_takeaway or concept.concept, "", state)
 
     async def _build_art(
         self,
@@ -956,7 +1055,7 @@ class OpeningRoom:
                             "opening_research",
                             title=ctx.title,
                             claim=concept.data_claim or concept.concept,
-                            post=clip_post(ctx.markdown, 8000, tail=0),
+                            post=clip_post(ctx.markdown, 5000, tail=0),
                         ),
                         effort=self.settings.effort_research,
                         max_searches=self.settings.opening_max_searches,
@@ -1063,6 +1162,9 @@ class OpeningRoom:
     def _finish(self, state: dict[str, Any], built: _Built) -> OpeningResult:
         if "art" not in built.state:
             state.pop("art", None)
+        if built.provider != raster.PROVIDER:
+            state.pop("medium", None)
+            state.pop("prompt", None)
         state.update(built.state)
         return OpeningResult(built.png, built.width, built.height, built.provider, json.dumps(state), built.alt, built.caption)
 

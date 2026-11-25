@@ -129,7 +129,7 @@ async def secondary_status(services: ServicesDep) -> list[SecondaryStatusOut]:
             model=cli.label,
             install_url=INSTALL_URLS[provider],
             installed=cli.command is not None,
-            signed_in=await cli.signed_in(),
+            signed_in=await cli.signed_in(fresh=True),
             login_in_progress=cli.signing_in,
         )
         for provider, cli in services.secondary.items()
@@ -180,12 +180,24 @@ def _settings_out(services: ServicesDep) -> SettingsOut:
         humanize_rounds=s.humanize_rounds,
         reference_max_searches=s.reference_max_searches,
         check_reference_links=s.check_reference_links,
+        image_quality=s.image_quality,
         image_tool_label=f"{model_label(s.model)}: SVG illustrations, icons and diagrams; Vega-Lite charts",
         data_dir=str(s.data_dir),
         seed_samples_dir=str(s.seed_samples_dir),
         version=__version__,
         demo=s.demo,
     )
+
+
+def merge_secondary(current: SecondarySettings, change: SecondarySettings) -> SecondarySettings:
+    """Apply only the fields the author sent (``images`` field by field), validated."""
+    merged = current.model_dump()
+    update = change.model_dump(exclude_unset=True)
+    images = update.pop("images", None)
+    merged.update(update)
+    if images is not None:
+        merged["images"] = {**merged["images"], **change.images.model_dump(exclude_unset=True)}
+    return SecondarySettings.model_validate(merged)
 
 
 @router.get("/settings", response_model=SettingsOut)
@@ -200,7 +212,7 @@ def update_settings(body: SettingsIn, services: ServicesDep) -> SettingsOut:
         if value is None:
             continue
         if isinstance(value, SecondarySettings):
-            value = services.settings.secondary.model_copy(update=value.model_dump(exclude_unset=True))
+            value = merge_secondary(services.settings.secondary, value)
         if key == "detector_models":
             unknown = sorted(set(value) - set(local_detector.BY_ID))
             if unknown:

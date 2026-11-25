@@ -12,6 +12,7 @@ import logging
 import random
 import re
 import traceback
+from contextvars import ContextVar
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from sqlmodel import Session, col, select
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage
+from inferno_ghostwriter.images import raster
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, thumbnail_png
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
@@ -43,6 +45,8 @@ from inferno_ghostwriter.images.render import add_meme_text, svg_to_png
 from inferno_ghostwriter.images.specs import SvgMemeSpec
 from inferno_ghostwriter.llm import LLM, LLMError
 from inferno_ghostwriter.llm.base import UsageSink
+from inferno_ghostwriter.llm.router import lead_provider
+from inferno_ghostwriter.llm.secondary import LABELS, MODEL_IDS
 from inferno_ghostwriter.prompts import render
 from inferno_ghostwriter.storage import Storage
 
@@ -54,8 +58,25 @@ STALE_PENDING = "Generation stopped before this image was made. Click Redraw to 
 HISTORY_FIELDS = ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits")
 
 
+# The task that designs each kind of drawing: with image routing on, an optional model may design it, and the
+# credit then names that model (code still draws it).
+MAKER_TASKS = {
+    "vega-lite": "chart image design",
+    "claude-diagram": "diagram design",
+    "claude-art": "opening data art",
+    "claude-opening": "opening template build",
+    "claude-meme": "meme ideas",
+    "claude-svg": "illustration image design",
+}
+OPTIONAL_LABELS = {MODEL_IDS[p]: LABELS[p].split(" (")[0] for p in MODEL_IDS}
+# Who designed each kind in the image being made (set per image in ``create``; read by ``_result``).
+_makers: ContextVar[dict[str, str] | None] = ContextVar("image_makers", default=None)
+
+
 def model_label(model: str) -> str:
-    """'claude-opus-5-5' -> 'Claude Opus 5.5' (unknown ids are returned unchanged)."""
+    """'claude-opus-5-5' -> 'Claude Opus 5.5', an optional model's id -> its name (others are returned unchanged)."""
+    if model in OPTIONAL_LABELS:
+        return OPTIONAL_LABELS[model]
     match = re.fullmatch(r"claude-([a-z]+)-(\d+)-(\d+)(?:-\d{8})?", model)
     if not match:
         return model
@@ -73,6 +94,7 @@ def tool_label(provider: str, model: str) -> str:
         "claude-scene": f"{claude} (scene)",
         "claude-art": f"{claude} (generative art)",
         "claude-diagram": f"{claude} (diagram)",
+        raster.PROVIDER: raster.TOOL_LABEL,
         "placeholder": "Inferno Ghostwriter",
     }.get(provider, provider)
 
@@ -206,6 +228,11 @@ class ImageService:
             image = session.get(ProjectImage, image_id)
             if image is None:
                 raise KeyError(image_id)
+        makers = {}
+        for provider, task in MAKER_TASKS.items():
+            lead = await lead_provider(self.llm, task)
+            makers[provider] = MODEL_IDS.get(lead, self.settings.model)  # type: ignore[call-overload]
+        _makers.set(makers)
         try:
             if instruction.strip():
                 updates = await self._edit(image, persona=persona, instruction=instruction, brand_kit=brand_kit, usage=usage)
@@ -533,6 +560,13 @@ class ImageService:
             drawn = await self.body.draw({**base, "kind": format}, ctx, variation, usage)
             return drawn, {}
         fresh_room = self.settings.image_body_candidates > 1 and not image.builds_on
+        if redraw and not rethink and image.provider == raster.PROVIDER:
+            # A painting is painted again from its prompt, with the redraw's critique and twist; Claude draws it
+            # instead only when painting is unavailable.
+            try:
+                return await self.body.repaint(image.spec, variation, None, usage), {}
+            except ImageProviderError:
+                pass
         if redraw and not rethink and stored and isinstance(stored.get("chosen"), int):
             # Redraw the idea on show (with the redraw's critique and twist).
             return await self.body.draw(concepts[stored["chosen"]], ctx, variation, usage), {}
@@ -617,6 +651,9 @@ class ImageService:
         """Change the current design as the author asks, keeping everything else about it."""
         if image.provider in ("upload", "placeholder") or not image.spec:
             raise ImageProviderError("Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
+        if image.provider == raster.PROVIDER and raster.load(image.spec):
+            current = self._current_png(image)
+            return self._result(image, await self.body.repaint(image.spec, instruction, current, usage), persona)
         art = self._art_direction(brand_kit, persona, "")
         if image.kind == "meme" and load_state(image.spec):
             return self._result(image, await self.memes.edit(image.spec, instruction, art, usage=usage), persona)
@@ -625,7 +662,10 @@ class ImageService:
                 project = session.get(Project, image.project_id)
                 title, markdown = (project.title, project.markdown) if project else ("", "")
             context = self._opening_context(image, persona, title, markdown, "")
-            return self._result(image, await self.opening.edit(image.spec, instruction, context, art, usage=usage), persona)
+            current = self._current_png(image)
+            return self._result(
+                image, await self.opening.edit(image.spec, instruction, context, art, usage=usage, current=current), persona
+            )
         _, brand = brand_guidance(brand_kit, persona)
         prompt = render(
             "image_edit",
@@ -646,6 +686,11 @@ class ImageService:
         kind = "chart" if image.provider == "vega-lite" else image.kind
         drawn = await self.body.design(kind, prompt, task=f"{image.kind} image edit", palette=brand_palette(brand_kit), usage=usage)
         return self._result(image, drawn, persona)
+
+    def _current_png(self, image: ProjectImage) -> bytes | None:
+        """The picture on show, as stored (None when there is none)."""
+        path = self.storage.image_dir(image.project_id) / image.file_name if image.file_name else None
+        return path.read_bytes() if path is not None and path.exists() else None
 
     async def _legacy_meme(self, prompt: str, usage: UsageSink | None) -> tuple[Drawn, SvgMemeSpec]:
         meme = await self.llm.structured(
@@ -854,7 +899,7 @@ class ImageService:
             "provider": drawn.provider,
             "width": drawn.width,
             "height": drawn.height,
-            "credit": credit_line(persona, drawn.provider, self.settings.model),
+            "credit": credit_line(persona, drawn.provider, (_makers.get() or {}).get(drawn.provider, self.settings.model)),
             "seed": None,
             "spec": drawn.spec,
             "alt": drawn.alt,

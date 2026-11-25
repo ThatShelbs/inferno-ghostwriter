@@ -18,6 +18,7 @@ from sqlalchemy import Engine
 from sqlmodel import Session, select
 
 from inferno_ghostwriter.db import Job, utcnow
+from inferno_ghostwriter.llm.ledger import UsageLedger, using
 
 log = logging.getLogger(__name__)
 
@@ -139,18 +140,20 @@ class JobManager:
     async def _run(self, job_id: str, fn: JobFn) -> None:
         ctx = JobContext(self, job_id)
         channel = self._channel(job_id)
+        ledger = UsageLedger()
         self._update(job_id, status="running")
         channel.push("status", {"status": "running"})
         try:
-            result = await fn(ctx)
+            with using(ledger):
+                result = await fn(ctx)
         except asyncio.CancelledError:
-            self._update(job_id, status="failed", error="Cancelled", usage=ctx.usage)
+            self._update(job_id, status="failed", error="Cancelled", usage=_usage(ctx, ledger))
             raise
         except Exception as exc:
             log.exception("Job %s failed", job_id)
-            self._update(job_id, status="failed", error=_friendly_error(exc), usage=ctx.usage)
+            self._update(job_id, status="failed", error=_friendly_error(exc), usage=_usage(ctx, ledger))
         else:
-            self._update(job_id, status="succeeded", progress=1.0, result=result or {}, usage=ctx.usage)
+            self._update(job_id, status="succeeded", progress=1.0, result=result or {}, usage=_usage(ctx, ledger))
         finally:
             channel.push("status", _status_payload(self.get(job_id)))
             channel.done = True
@@ -178,6 +181,14 @@ class JobManager:
                 job.error = "Interrupted because Inferno Ghostwriter was restarted."
                 session.add(job)
             session.commit()
+
+
+def _usage(ctx: JobContext, ledger: UsageLedger) -> dict[str, Any]:
+    """The job's plain totals, plus who answered (``by_model``) when any call went through the router."""
+    usage: dict[str, Any] = dict(ctx.usage)
+    if ledger.rows:
+        usage["by_model"] = ledger.summary()
+    return usage
 
 
 def _status_payload(job: Job) -> dict[str, Any]:

@@ -16,6 +16,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   'claude-scene': 'Claude scene',
   'claude-art': 'Claude generative art',
   'claude-diagram': 'Claude diagram',
+  'gpt-image': 'GPT image (ChatGPT)',
   placeholder: 'Placeholder',
   upload: 'Your upload',
 }
