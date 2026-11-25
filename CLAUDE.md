@@ -122,7 +122,8 @@ Backend (run in `backend/`):
 
 ```bash
 uv sync
-uv run pytest                     # fake Claude + fake image model; no network
+uv run pytest                     # fake Claude + fake image model; no network; parallel (pytest-xdist, -n auto in addopts: ~3 min vs ~17 serial on 16 cores)
+uv run pytest -n 0 tests/unit/test_x.py   # serial, for debugging (pdb, print) or a single file
 uv run ruff check src tests scripts evals
 uv run ruff format src tests scripts evals
 uv run mypy
