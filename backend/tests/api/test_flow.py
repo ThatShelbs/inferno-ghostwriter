@@ -126,6 +126,7 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     # Exactly one finalist is the picture on show, for every image that has finalists.
     assert all(sum(f["current"] for f in img["finalists"]) == 1 for img in project["images"] if img["finalists"])
     # Picking another finalist costs nothing and swaps the picture.
+    original_provider = hero["provider"]
     picked = client.post(f"/api/images/{hero['id']}/pick", json={"index": 1}).json()
     assert picked["finalists"][1]["current"] and picked["url"] != hero["url"]
     assert client.get(picked["finalists"][2]["url"]).status_code == 200
@@ -133,7 +134,7 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     hero = picked
 
     def opening_builds() -> list[dict]:
-        return [c for c in fake_llm.calls if c["task"].startswith("opening ") and c["task"].endswith(("drawing", "build", "scene"))]
+        return [c for c in fake_llm.calls if c["task"].startswith("opening ") and c["task"].endswith(("drawing", "build", "scene", "data art"))]
 
     builds_before, ideas_before = len(opening_builds()), fake_llm.tasks().count("opening ideas")
     redraw = client.post(f"/api/images/{hero['id']}/redraw", json={}).json()
@@ -143,7 +144,8 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     uploaded = client.post(f"/api/images/{hero['id']}/upload", files={"file": ("shot.png", png_bytes(), "image/png")}).json()
     assert uploaded["provider"] == "upload" and len(uploaded["history"]) == 4
     reverted = client.post(f"/api/images/{hero['id']}/revert", json={"index": 0}).json()
-    assert reverted["provider"] == hero["provider"]
+    # The first version is the picture the room chose (finalists may be other styles, so compare with that one).
+    assert reverted["provider"] == original_provider
     assert client.get(reverted["history"][1]["url"]).status_code == 200
 
     # Editing: title, caption, passage rewrite.
