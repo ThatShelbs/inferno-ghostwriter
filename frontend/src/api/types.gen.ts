@@ -548,6 +548,7 @@ export interface IdeaWriteIn {
 
 export interface ImageEditIn {
   instruction: string;
+  model?: "auto" | "claude" | "codex" | "gemini";
 }
 
 export interface ImageFormatOut {
@@ -931,6 +932,7 @@ export interface RedrawIn {
   note?: string;
   tweaks?: Record<string, string> | null;
   improve?: boolean;
+  model?: "auto" | "claude" | "codex" | "gemini";
 }
 
 export interface ReferenceHistoryOut {

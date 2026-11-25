@@ -66,6 +66,7 @@ import type {
   VoiceProfileOut,
   VoiceProfileVersion,
   VoiceSourceIn,
+  RedrawIn,
 } from './types.gen'
 
 export const keys = {
@@ -137,6 +138,14 @@ export function useSecondaryStatus(enabled: boolean) {
     enabled,
     refetchInterval: (query) => (query.state.data?.some((provider) => provider.login_in_progress) ? 2000 : false),
   })
+}
+
+/** The models an image dialog may offer: Auto and Claude plus each optional model signed in now; empty when none is. */
+export function useImageModels(): ImageRoute[] {
+  const { data: settings } = useSettings()
+  const { data: providers } = useSecondaryStatus(settings?.demo === false)
+  const online = (providers ?? []).filter((p) => p.signed_in).map((p) => p.provider)
+  return online.length > 0 ? ['auto', 'claude', ...online] : []
 }
 
 export function useSecondaryAuth(provider: SecondaryStatusOut['provider']) {
@@ -666,6 +675,9 @@ export function useFormulaMutations() {
   }
 }
 
+/** Who does an image redraw or edit: 'auto' follows Settings -> Image work. */
+export type ImageRoute = NonNullable<RedrawIn['model']>
+
 /** What a redraw should make: one of the image's stored ideas, or new pitches in another format, with an optional steer. */
 export interface RedrawPicks {
   /** An index from ``image.room.pitches``. */
@@ -678,6 +690,8 @@ export interface RedrawPicks {
   tweaks?: Record<string, string>
   /** False skips Claude's critique and only tries the twist. */
   improve?: boolean
+  /** Who pitches and designs it: 'auto' follows Settings; an optional model only while it is signed in. */
+  model?: ImageRoute
 }
 
 export function useImageMutations(projectId: number) {
@@ -693,6 +707,7 @@ export function useImageMutations(projectId: number) {
           note: picks.note ?? '',
           tweaks: picks.tweaks ?? null,
           improve: picks.improve ?? true,
+          model: picks.model ?? 'auto',
         }),
     }),
     /** Make an image extend an earlier one; it is drawn again from that image's data and look. */
@@ -717,7 +732,8 @@ export function useImageMutations(projectId: number) {
     redrawAll: useMutation({ mutationFn: () => api.post<JobOut>(`/api/projects/${projectId}/images/redraw`) }),
     /** Change an image as described ("make the arrows orange"), keeping the rest of it. */
     edit: useMutation({
-      mutationFn: ({ id, instruction }: { id: number; instruction: string }) => api.post<JobOut>(`/api/images/${id}/edit`, { instruction }),
+      mutationFn: ({ id, instruction, model }: { id: number; instruction: string; model?: ImageRoute }) =>
+        api.post<JobOut>(`/api/images/${id}/edit`, { instruction, model: model ?? 'auto' }),
     }),
     /** Attach a style reference ("make it like this"); the designer and the judge see it on every draw of this image. */
     setReference: useMutation({

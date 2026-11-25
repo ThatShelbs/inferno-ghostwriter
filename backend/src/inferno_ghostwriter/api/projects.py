@@ -47,14 +47,16 @@ from inferno_ghostwriter.api.schemas import (
     WordsIn,
 )
 from inferno_ghostwriter.authenticity import analyze, author_profile
+from inferno_ghostwriter.config import ImageRoute
 from inferno_ghostwriter.db import Idea, Persona, PersonaEvolution, Project, ProjectImage, ProjectReference, Sample, utcnow
 from inferno_ghostwriter.evolution import change_stage, edit_rate, start_analysis
 from inferno_ghostwriter.export import PLATFORMS, Platform, build_bundle, copy_html, linkedin_post
-from inferno_ghostwriter.images import ImageProviderError, to_png
+from inferno_ghostwriter.images import ImageProviderError, raster, to_png
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.opening.styles import STYLES, suggested_by_type
 from inferno_ghostwriter.jobs import JobContext
 from inferno_ghostwriter.llm import LLMError
+from inferno_ghostwriter.llm.router import image_model
 from inferno_ghostwriter.services import Services
 from inferno_ghostwriter.voice import current_voice_profile
 from inferno_ghostwriter.voice.lessons import extract_lessons, record_lessons
@@ -581,8 +583,15 @@ async def _image_job(
     note: str = "",
     tweaks: dict[str, str] | None = None,
     improve: bool = True,
+    model: ImageRoute = "auto",
 ) -> JobOut:
     image = image_or_404(session, image_id)
+    if model in ("codex", "gemini"):
+        cli = services.secondary.get(model)
+        if cli is None or not await cli.signed_in():
+            raise HTTPException(
+                422, f"{'ChatGPT' if model == 'codex' else 'Gemini'} is not signed in. Sign in under Settings -> Optional models."
+            )
     project = project_or_404(session, image.project_id)
     # Detached copies: the job outlives this request's database session.
     persona = Persona.model_validate(persona_or_404(session, project.persona_id).model_dump())
@@ -593,23 +602,24 @@ async def _image_job(
 
     async def run(ctx):  # type: ignore[no-untyped-def]
         await ctx.progress(0.1, "Editing image" if instruction else "Redrawing image")
-        result = await services.images.create(
-            image_id,
-            persona=persona,
-            title=title,
-            markdown=markdown,
-            voice_profile=voice,
-            redraw=True,
-            rethink=rethink,
-            brand_kit=brand_kit,
-            instruction=instruction,
-            concept=concept,
-            format=format,
-            note=note,
-            tweaks=tweaks,
-            improve=improve,
-            usage=ctx.add_usage,
-        )
+        with image_model(model):
+            result = await services.images.create(
+                image_id,
+                persona=persona,
+                title=title,
+                markdown=markdown,
+                voice_profile=voice,
+                redraw=True,
+                rethink=rethink,
+                brand_kit=brand_kit,
+                instruction=instruction,
+                concept=concept,
+                format=format,
+                note=note,
+                tweaks=tweaks,
+                improve=improve,
+                usage=ctx.add_usage,
+            )
         if result.status == "error":
             raise ImageProviderError(result.error or "Image generation failed.")
         return {
@@ -651,6 +661,7 @@ async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, servi
         note=body.note,
         tweaks=body.tweaks,
         improve=body.improve,
+        model=body.model,
     )
 
 
@@ -903,7 +914,9 @@ async def edit_image(image_id: int, body: ImageEditIn, session: SessionDep, serv
     image = image_or_404(session, image_id)
     if image.provider in ("upload", "placeholder") or not image.spec:
         raise HTTPException(422, "Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
-    return await _image_job(services, session, image_id, instruction=body.instruction)
+    # Only GPT can change a painting, so a painting's edit ignores the model choice.
+    model = "auto" if image.provider == raster.PROVIDER else body.model
+    return await _image_job(services, session, image_id, instruction=body.instruction, model=model)
 
 
 @router.post("/images/{image_id}/reference", response_model=ImageOut)

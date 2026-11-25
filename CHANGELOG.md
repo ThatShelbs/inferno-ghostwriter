@@ -6,6 +6,8 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Fixed
 
+- **The finalist thumbnails follow your redraws.** After Redraw, Remix, Edit or a picked idea, the strip under an image kept showing the judge's old three pictures. The new picture now takes the place of the finalist it came from (labelled *Your latest version*) and the other two stay as alternatives; earlier pictures are still in *Versions*.
+- **A redraw no longer fails with "Input must be provided".** With a Claude subscription, Claude Code sometimes missed the prompt when several calls started at once; that call is now retried once.
 - **Picking a meme format no longer fails with "FileNotFoundError".** With a Claude subscription, a Claude Code process that could not start (for example after it updated itself) crashed the whole image instead of just one judge. It is now a plain "Could not start Claude Code" error, a failed judge simply sits out, and unexpected image errors say where they happened.
 - **Redraw and Remix keep your edits.** After you changed an image with **Edit**, Redraw and Remix went back to the original idea. They now build on the edited picture (illustrations, diagrams, charts, the opening image and memes) and only change the look; *New idea* still starts fresh.
 
@@ -18,6 +20,7 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Added
 
+- **Choose the model for one image.** While ChatGPT or Gemini is signed in, *Ideas*, *Remix* and *Edit* have a **Model** choice: Auto (your *Image work* settings), Claude, ChatGPT or Gemini do that image's ideas and design. The judge stays as set, and choosing Claude or Gemini skips GPT painting. With no optional model signed in the choice is hidden.
 - **ChatGPT can paint a rival picture.** With ChatGPT signed in, its own image generation paints one candidate for the opening image and for each illustration, judged side by side with the drawn ones. Paintings have no words in them and can be redrawn, remixed and edited by instruction like any other image. Turn it off under *Image work*.
 - **Every image, rebuilt for quality: pick from three finalists.** The opening image, the closing meme and every diagram, chart, illustration and screenshot in between are now made the same way. See [docs/images.md](docs/images.md).
   - **Ideas tied to the story.** Claude pitches several ideas for each image, and every idea quotes the passage of your post it serves; an idea that misquotes the post ranks last. A fresh deal of "angle cards" each time means two runs on the same post pitch different ideas.
