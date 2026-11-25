@@ -40,6 +40,7 @@ dev = [
     "mypy>=2.4.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-xdist>=3.8.0",
     "respx>=0.23.1",
     "ruff>=0.17.1",
 ]
@@ -53,7 +54,7 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = ["live: calls the real Claude API (costs money; opt-in with -m live)"]
-addopts = "-m 'not live'"
+addopts = "-m 'not live' -n auto --dist loadgroup"
 filterwarnings = ["ignore::DeprecationWarning:trafilatura.*"]
 
 [tool.ruff]
