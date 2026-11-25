@@ -39,7 +39,7 @@ A chat window gives you a draft in *its* voice, once, with no memory, no picture
 | **Images** | Text only, or stock art | Opening image, diagrams, data charts, mock screenshots and a closing meme, all drawn for *this* post, credited, editable and redrawable |
 | **Facts and links** | Plausible-sounding, sometimes invented | Every source, quote and link is checked against a real web search, or left out |
 | **Sounds human?** | Unknown | A **reads-as-human score** (0-100) calibrated to your own writing, with one-click Humanize |
-| **Where it goes** | Copy, paste, reformat | One-click optimized export for **Medium, Substack, LinkedIn** (article, feed post, PDF/PowerPoint carousel), **X Articles** and **Gumroad** |
+| **Where it goes** | Copy, paste, reformat | One-click optimized export for **Medium, Substack, LinkedIn** (article, feed post, PDF/PowerPoint carousel), **X Articles** and **Gumroad**, plus a hands-on **GitHub kit** (notebook, data, code, prompts) |
 | **Getting better** | Starts from zero every chat | Learns from every edit you make, and from which posts you publish and how they perform |
 | **Your data** | In someone else's history | Stays on your computer; keys live in your operating system's keychain |
 
@@ -77,6 +77,7 @@ It is specialized for technical writing: data science, Python, data visualizatio
 - **Gets better as you edit.** Inferno Ghostwriter remembers what you cut, swap and ask for in its drafts and writes so you don't have to fix it again. Posts plan their own callbacks, so key ideas and running jokes come back and pay off.
 - **Evolves with every post you publish.** Mark posts Draft, Ready or Published and rate how they did (Too early, Small hit, Medium hit, Big hit). Publishing compares your final version with what Inferno Ghostwriter generated and proposes a few small changes to the persona; a hit is read for its secret sauce, which goes into the persona's playbook. Review and apply what you agree with (profile changes become a new voice profile version) and watch the share of text you need to edit fall.
 - **Export** for Medium, Substack, LinkedIn (article, feed post and a PDF/PowerPoint document carousel), X (an X Article with a 5:2 header and a teaser post), Gumroad (PDF), or Markdown/Word, as a zip or copy-and-paste HTML with images embedded.
+- **Hands-on kit.** Turn a tutorial, analysis or code post into its own GitHub repository: the article as a Jupyter notebook with runnable, beginner-friendly cells, the data behind every chart, starter prompts and the images, pushed with your own GitHub CLI (public or private) and ready for Google Colab.
 - **Day and night themes** in an inferno palette, a one-click Windows launcher, and a demo mode to try everything without API keys.
 
 ## Quick start

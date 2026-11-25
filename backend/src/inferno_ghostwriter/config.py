@@ -99,6 +99,8 @@ class Settings(BaseSettings):
     effort_plan: Effort = "medium"
     effort_draft: Effort = "high"
     effort_critique: Effort = "medium"
+    # The hands-on kit (see kit/): code, data and prompts for a companion repo, written once per export.
+    effort_kit: Effort = "high"
     effort_images: Effort = "medium"
     # Every redraw first critiques the current image and plans how to improve it (see images/remix.py).
     effort_image_improve: Effort = "medium"

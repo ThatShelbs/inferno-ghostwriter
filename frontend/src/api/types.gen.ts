@@ -365,6 +365,14 @@ export interface GenerateIn {
   interview?: InterviewAnswer[] | null;
 }
 
+export interface GitHubStatusOut {
+  installed: boolean;
+  signed_in: boolean;
+  login: string;
+  message: string;
+  sign_in_command: string;
+}
+
 export interface Health {
   status?: "ok";
   version: string;
@@ -671,6 +679,56 @@ export interface JobOut {
   error: string | null;
   usage: Record<string, unknown>;
   created_at: string;
+}
+
+export interface KitBuildIn {
+  library?: "auto" | "altair" | "plotly" | "matplotlib" | "seaborn";
+  note?: string;
+  article_url?: string;
+}
+
+export interface KitFitOut {
+  recommended: boolean;
+  article_type: string;
+  reasons: string[];
+}
+
+export interface KitLibraryOut {
+  id: string;
+  label: string;
+}
+
+export interface KitLinkOut {
+  added: boolean;
+}
+
+export interface KitOut {
+  fit: KitFitOut;
+  built: boolean;
+  built_at: string | null;
+  library: string;
+  note: string;
+  article_url: string;
+  files: string[];
+  notes: string[];
+  repo: KitRepoOut | null;
+  default_name: string;
+  linked: boolean;
+  libraries: KitLibraryOut[];
+}
+
+export interface KitPushIn {
+  name?: string | null;
+  visibility?: "public" | "private";
+}
+
+export interface KitRepoOut {
+  owner: string;
+  name: string;
+  visibility: "public" | "private";
+  url: string;
+  colab_url: string | null;
+  pushed_at: string;
 }
 
 export interface LessonItem {

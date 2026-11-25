@@ -219,6 +219,14 @@ test('first run: persona, writing sample, voice profile, post, editor, export, t
   await page.getByRole('radio', { name: 'LinkedIn' }).click()
   await page.getByRole('button', { name: 'Write with Claude' }).click()
   await expect(page.getByLabel('LinkedIn feed post')).toHaveValue(/I shipped a 94% accurate model on a Friday/)
+  // Hands-on kit: build it, download it; demo mode has no GitHub CLI, so the dialog says how to get one
+  await page.getByRole('radio', { name: /GitHub kit/ }).click()
+  await page.getByRole('button', { name: 'Build kit' }).click()
+  const kitZip = page.getByRole('button', { name: 'Download kit (.zip)' })
+  await expect(kitZip).toBeVisible({ timeout: 30_000 })
+  const [kit] = await Promise.all([page.waitForEvent('download'), kitZip.click()])
+  expect(kit.suggestedFilename()).toBe('your-model-is-a-promise-not-a-prototype-kit.zip')
+  await expect(page.getByText('Install the GitHub CLI', { exact: true })).toBeVisible()
   await page.getByRole('button', { name: 'Close' }).click()
 
   // AI-detection report

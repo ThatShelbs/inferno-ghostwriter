@@ -1304,3 +1304,68 @@ class PersonaInsightsOut(BaseModel):
     phrases: list[CountItem]
     formula: FormulaFlowOut
     track_record: TrackRecordOut
+
+
+# -- hands-on kit ----------------------------------------------------------------------------
+
+
+class KitFitOut(BaseModel):
+    recommended: bool
+    article_type: str
+    reasons: list[str]
+
+
+class KitLibraryOut(BaseModel):
+    id: str
+    label: str
+
+
+class KitRepoOut(BaseModel):
+    owner: str
+    name: str
+    visibility: Literal["public", "private"]
+    url: str
+    colab_url: str | None
+    pushed_at: str
+
+
+class KitOut(BaseModel):
+    fit: KitFitOut
+    built: bool
+    built_at: str | None
+    library: str
+    note: str
+    article_url: str
+    # Paths of the kit's files, relative to the repository root.
+    files: list[str]
+    # What the build left out (code that failed the checks).
+    notes: list[str]
+    repo: KitRepoOut | None
+    default_name: str
+    linked: bool
+    libraries: list[KitLibraryOut]
+
+
+class KitBuildIn(BaseModel):
+    library: Literal["auto", "altair", "plotly", "matplotlib", "seaborn"] = "auto"
+    note: str = Field(default="", max_length=2000)
+    # The published article, for the README and notebook (optional).
+    article_url: str = Field(default="", max_length=500)
+
+
+class KitPushIn(BaseModel):
+    # The new repository's name (default: the post's slug); ignored once the kit has a repository.
+    name: str | None = Field(default=None, max_length=100)
+    visibility: Literal["public", "private"] = "private"
+
+
+class KitLinkOut(BaseModel):
+    added: bool
+
+
+class GitHubStatusOut(BaseModel):
+    installed: bool
+    signed_in: bool
+    login: str
+    message: str
+    sign_in_command: str

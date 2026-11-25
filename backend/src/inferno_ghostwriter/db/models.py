@@ -149,6 +149,8 @@ class Project(SQLModel, table=True):
     idea_id: int | None = None
     # The optional interview (see writer.interview): [{question, answer}]; answered ones are woven into the post.
     interview: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON, default=[]))
+    # The hands-on kit (see kit/): its design, settings and, once pushed, its GitHub repository. None = never built.
+    kit: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
