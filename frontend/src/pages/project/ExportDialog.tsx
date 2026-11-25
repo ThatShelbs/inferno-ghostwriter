@@ -2,9 +2,10 @@ import { Check, ClipboardCopy, Download, Sparkles } from 'lucide-react'
 import { useState } from 'react'
 
 import { errorText } from '../../api/client'
-import { fetchCopyHtml, useLinkedInPost, useWriteLinkedInPost } from '../../api/hooks'
+import { fetchCopyHtml, useKit, useLinkedInPost, useWriteLinkedInPost } from '../../api/hooks'
 import { Button, Dialog, Notice, Textarea } from '../../components/ui'
 import { cx } from '../../lib/cx'
+import { KitPanel } from './KitPanel'
 
 const POST_LIMIT = 3000
 const SEE_MORE_AT = 210
@@ -32,6 +33,7 @@ const PLATFORMS = [
   },
   { id: 'gumroad', name: 'Gumroad', tip: 'The zip includes a print-ready PDF plus an HTML version and a cover image.' },
   { id: 'markdown', name: 'Markdown', tip: 'Front matter for dev.to, Hashnode, Ghost or a static site, plus a Word version.' },
+  { id: 'kit', name: 'GitHub kit', tip: '' },
 ] as const
 
 const COPYABLE = new Set(['medium', 'substack', 'linkedin', 'x'])
@@ -98,6 +100,7 @@ export function ExportDialog({ projectId, open, onClose, initial = 'medium' }: {
   const [error, setError] = useState<string | null>(null)
   const [copying, setCopying] = useState(false)
   const current = PLATFORMS.find((p) => p.id === platform) ?? PLATFORMS[0]
+  const kit = useKit(projectId, open)
 
   const copy = async () => {
     setError(null)
@@ -117,7 +120,7 @@ export function ExportDialog({ projectId, open, onClose, initial = 'medium' }: {
   }
 
   return (
-    <Dialog open={open} onClose={onClose} title="Export your post" wide={platform === 'linkedin'}>
+    <Dialog open={open} onClose={onClose} title="Export your post" wide={platform === 'linkedin' || platform === 'kit'}>
       <div className="space-y-5">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3" role="radiogroup" aria-label="Platform">
           {PLATFORMS.map((p) => (
@@ -133,23 +136,30 @@ export function ExportDialog({ projectId, open, onClose, initial = 'medium' }: {
               )}
             >
               {p.name}
+              {p.id === 'kit' && kit.data?.fit.recommended && <span className="ml-2 text-xs font-normal text-accent">Recommended</span>}
             </button>
           ))}
         </div>
-        <p className="text-sm text-muted">{current.tip}</p>
-        <div className="flex flex-wrap gap-2">
-          {COPYABLE.has(platform) && (
-            <Button icon={copied ? <Check className="size-4" /> : <ClipboardCopy className="size-4" />} onClick={copy} loading={copying}>
-              {copied ? 'Copied!' : platform === 'linkedin' ? 'Copy article for LinkedIn' : `Copy for ${current.name}`}
-            </Button>
-          )}
-          <a href={`/api/projects/${projectId}/export/${platform}`} download>
-            <Button variant={COPYABLE.has(platform) ? 'secondary' : 'primary'} icon={<Download className="size-4" />}>
-              Download bundle (.zip)
-            </Button>
-          </a>
-        </div>
-        {error && <Notice tone="error">Could not copy: {error}. Download the bundle instead.</Notice>}
+        {platform === 'kit' ? (
+          open && <KitPanel projectId={projectId} />
+        ) : (
+          <>
+            <p className="text-sm text-muted">{current.tip}</p>
+            <div className="flex flex-wrap gap-2">
+              {COPYABLE.has(platform) && (
+                <Button icon={copied ? <Check className="size-4" /> : <ClipboardCopy className="size-4" />} onClick={copy} loading={copying}>
+                  {copied ? 'Copied!' : platform === 'linkedin' ? 'Copy article for LinkedIn' : `Copy for ${current.name}`}
+                </Button>
+              )}
+              <a href={`/api/projects/${projectId}/export/${platform}`} download>
+                <Button variant={COPYABLE.has(platform) ? 'secondary' : 'primary'} icon={<Download className="size-4" />}>
+                  Download bundle (.zip)
+                </Button>
+              </a>
+            </div>
+            {error && <Notice tone="error">Could not copy: {error}. Download the bundle instead.</Notice>}
+          </>
+        )}
         {platform === 'linkedin' && open && <LinkedInPost projectId={projectId} />}
       </div>
     </Dialog>

@@ -14,7 +14,7 @@ from sqlmodel import Session, select
 
 from inferno_ghostwriter import __version__
 from inferno_ghostwriter.abtest.service import fail_interrupted
-from inferno_ghostwriter.api import ab_tests, evolution, formulas, idea_lab, insights, jobs, personas, projects, references, system
+from inferno_ghostwriter.api import ab_tests, evolution, formulas, idea_lab, insights, jobs, kit, personas, projects, references, system
 from inferno_ghostwriter.authenticity import local_detector
 from inferno_ghostwriter.config import Settings, get_settings
 from inferno_ghostwriter.db import Persona
@@ -54,7 +54,7 @@ def create_app(settings: Settings | None = None, services: Services | None = Non
 
     app = FastAPI(title="Inferno Ghostwriter", version=__version__, lifespan=lifespan)
     app.state.services = services
-    for module in (system, personas, insights, projects, ab_tests, references, formulas, evolution, idea_lab, jobs):
+    for module in (system, personas, insights, projects, ab_tests, references, kit, formulas, evolution, idea_lab, jobs):
         app.include_router(module.router)
     _mount_frontend(app, settings.frontend_dist)
     return app

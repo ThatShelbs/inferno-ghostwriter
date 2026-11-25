@@ -124,6 +124,16 @@ Each choice can be pinned to Claude or one model. With **ChatGPT's own image gen
 
 Claude handles web research. When Claude's quota is exhausted, eligible text can finish while images that need a new Claude call may fail separately. Optional providers receive the context needed for their selected tasks, which can include the private brief, voice excerpts, article text, image references or candidate thumbnails. The app keeps routing preferences locally and leaves credentials with the CLI that owns the session. Disable all uses of a provider in Settings whenever you want to stop sending it work.
 
+## GitHub (hands-on kits)
+
+Pushing a [hands-on kit](exporting.md#hands-on-kit-github) uses the GitHub CLI and git already on your machine. Install the CLI from [cli.github.com](https://cli.github.com) (Windows: `winget install GitHub.cli`), then sign in once:
+
+```bash
+gh auth login --web --git-protocol https
+```
+
+The app runs `gh` and `git` as separate programs with prompts turned off and without its own API keys in their environment; it never reads or stores a GitHub token. The export dialog shows who is signed in. Without the CLI you can still build and download kits.
+
 ## Command line
 
 ```bash

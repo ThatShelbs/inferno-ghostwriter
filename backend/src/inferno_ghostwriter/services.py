@@ -13,6 +13,7 @@ from inferno_ghostwriter.db import AppSetting, make_engine
 from inferno_ghostwriter.idealab.collect import HttpSignalCollector, NoSignalCollector, SignalCollector
 from inferno_ghostwriter.images import ImageService
 from inferno_ghostwriter.jobs import JobManager
+from inferno_ghostwriter.kit import GitHubCLI, KitContext
 from inferno_ghostwriter.legacy import LEGACY_KEYRING_SERVICE, copy_legacy_secrets
 from inferno_ghostwriter.llm import LLM
 from inferno_ghostwriter.llm.auth import ClaudeAuth
@@ -58,6 +59,12 @@ class Services:
     pages: PageReader
     # Reads the Idea Lab's free feeds; tests and demo mode use canned items instead of going online.
     signals: SignalCollector
+    # The author's own GitHub CLI for pushing hands-on kits; tests and demo mode have none (or a fake).
+    github: GitHubCLI
+
+    @property
+    def kit(self) -> KitContext:
+        return KitContext(engine=self.engine, llm=self.llm, settings=self.settings, storage=self.storage, github=self.github)
 
     def save_runtime_setting(self, key: str, value: Any) -> None:
         if key not in RUNTIME_SETTINGS:
@@ -96,11 +103,13 @@ def build_services(
     links: LinkChecker | None = None,
     pages: PageReader | None = None,
     signals: SignalCollector | None = None,
+    github: GitHubCLI | None = None,
 ) -> Services:
     # Only the real Claude finds real links worth checking; a stand-in LLM (tests, demo mode) never goes online.
     links = links or (HttpLinkChecker() if llm is None and not settings.demo else NoLinkChecker())
     pages = pages or (HttpPageReader() if llm is None and not settings.demo else NoPageReader())
     signals = signals or (HttpSignalCollector() if llm is None and not settings.demo else NoSignalCollector())
+    github = github or (GitHubCLI.discover() if llm is None and not settings.demo else GitHubCLI(None))
     engine = make_engine(settings.db_path)
     load_runtime_settings(engine, settings)
     storage = Storage(settings.data_dir)
@@ -140,4 +149,5 @@ def build_services(
         links=links,
         pages=pages,
         signals=signals,
+        github=github,
     )

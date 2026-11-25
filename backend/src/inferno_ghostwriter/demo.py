@@ -82,6 +82,58 @@ REFERENCE_WORDS = {
 }
 
 
+# The hands-on kit's design for the demo post: beginner code, a synthetic dataset, one prompt.
+KIT_DESIGN: dict[str, Any] = {
+    "description": "Hands-on companion: swap pie charts for sorted bar charts in a few lines of Python.",
+    "library": "altair",
+    "learn": ["Load a small dataset with pandas", "Turn a pie chart into a sorted bar chart", "Label bars directly"],
+    "datasets": [
+        {
+            "file": "survey.csv",
+            "description": "Made-up survey answers: one row per favourite chart type, with a count.",
+            "source": "synthetic",
+            "code": (
+                "import numpy as np\n"
+                "import pandas as pd\n\n"
+                "rng = np.random.default_rng(42)  # a fixed seed, so everyone gets the same numbers\n"
+                'df = pd.DataFrame({"chart": ["Bar", "Line", "Pie", "Scatter"], "votes": rng.integers(10, 60, 4)})\n'
+                'df.to_csv("data/survey.csv", index=False)'
+            ),
+        }
+    ],
+    "cells": [
+        {
+            "anchor": "Bar charts. Seriously, bar charts. They let you compare values without squinting.",
+            "lead_in": "Here is the same survey as a sorted bar chart.",
+            "code": (
+                "import altair as alt\n"
+                "import pandas as pd\n\n"
+                'survey = pd.read_csv("data/survey.csv")\n\n'
+                'alt.Chart(survey, title="Bars make the winner obvious").mark_bar(color=COLORS[3]).encode(\n'
+                '    x=alt.X("votes:Q", title="Votes"),\n'
+                '    y=alt.Y("chart:N", sort="-x", title=None),\n'
+                ")"
+            ),
+        }
+    ],
+    "charts": [],
+    "scripts": [
+        {
+            "file": "01_sorted_bars.py",
+            "title": "A sorted bar chart",
+            "code": 'import pandas as pd\n\nsurvey = pd.read_csv("data/survey.csv")\nprint(survey.sort_values("votes", ascending=False))',
+        }
+    ],
+    "prompts": [
+        {
+            "title": "Pick the right chart",
+            "when": "Before you reach for a pie.",
+            "prompt": "I have [DESCRIBE YOUR DATA]. Which chart compares these values most clearly, and why?",
+        }
+    ],
+}
+
+
 class FakeLLM:
     def __init__(self, delay: float = 0.0, *, showcase: bool = False) -> None:
         # showcase: the polished first-impression post (demo_showcase.py) instead of the small test fixtures.
@@ -501,6 +553,8 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
                 }
             ],
         }
+    if name == "KitDesign":
+        return KIT_DESIGN
     if name == "LinkedInPost":
         return {
             "hook": "I stopped making pie charts in 2019. My dashboards got better overnight.",

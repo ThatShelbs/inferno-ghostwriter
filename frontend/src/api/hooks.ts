@@ -20,6 +20,7 @@ import type {
   FormulaCatalogOut,
   FormulaIn,
   FormulaOut,
+  GitHubStatusOut,
   GenerateIn,
   Health,
   IdeaCreate,
@@ -41,6 +42,10 @@ import type {
   RemixDimensionOut,
   OpeningCatalogOut,
   JobOut,
+  KitBuildIn,
+  KitLinkOut,
+  KitOut,
+  KitPushIn,
   LinkedInPostOut,
   PersonaCreate,
   PersonaDuplicateIn,
@@ -804,4 +809,34 @@ export function useWriteLinkedInPost(projectId: number) {
     mutationFn: () => api.post<LinkedInPostOut>(`/api/projects/${projectId}/linkedin-post`),
     onSuccess: (data) => qc.setQueryData([...keys.project(projectId), 'linkedin-post'], data),
   })
+}
+
+export const useKit = (projectId: number, enabled: boolean) =>
+  useQuery({
+    queryKey: [...keys.project(projectId), 'kit'],
+    queryFn: () => api.get<KitOut>(`/api/projects/${projectId}/kit`),
+    enabled,
+  })
+
+export const useGitHubStatus = (enabled: boolean) =>
+  useQuery({
+    queryKey: ['github-status'],
+    queryFn: () => api.get<GitHubStatusOut>('/api/github/status'),
+    enabled,
+  })
+
+export function useKitActions(projectId: number) {
+  const qc = useQueryClient()
+  const refresh = () => qc.invalidateQueries({ queryKey: [...keys.project(projectId), 'kit'] })
+  return {
+    refresh,
+    build: useMutation({ mutationFn: (body: KitBuildIn) => api.post<JobOut>(`/api/projects/${projectId}/kit`, body) }),
+    push: useMutation({ mutationFn: (body: KitPushIn) => api.post<JobOut>(`/api/projects/${projectId}/kit/push`, body) }),
+    link: useMutation({
+      mutationFn: () => api.post<KitLinkOut>(`/api/projects/${projectId}/kit/link`),
+      onSuccess: () => {
+        void qc.invalidateQueries({ queryKey: keys.project(projectId) })
+      },
+    }),
+  }
 }
