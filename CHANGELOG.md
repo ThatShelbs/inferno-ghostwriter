@@ -13,6 +13,7 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Changed
 
+- **ChatGPT generates images instead of Claude drawing them, not alongside.** With ChatGPT signed in, about half of the openers and illustrations (*Settings → Optional models → ChatGPT's own image generation*, default half) are generated natively from the same idea instead of drawn by Claude, with the same number of candidates and no extra rival. Charts, diagrams, icons, screenshots and meme text stay code-drawn, and Claude draws any image ChatGPT cannot make. Claude-only behaves as before.
 - **A post with images uses far less of your Claude plan.** With ChatGPT (Codex) or Gemini signed in, image work now goes to the model that suits it on **Auto**: image ideas, charts and diagram fills to ChatGPT or Gemini, the picture judge to ChatGPT, hand-drawn SVG to Claude, with Claude as the fallback. Pin any of them in *Settings → Optional models → Image work*.
 - **Fewer, better candidates.** The opener builds its three best ideas in different styles instead of six, an in-body image draws two, and only a weak winner gets another pass. A meme is still drawn six ways for free. *Settings → Image candidates → Max quality* brings back the wide room.
 - **Leaner prompts.** Image prompts carry the whole post condensed (every section, each paragraph's opening sentences) instead of the first pages, the meme menu is shorter, and broken SVG references are repaired in code instead of costing a second design.

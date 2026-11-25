@@ -224,7 +224,7 @@ async def test_image_work_goes_to_the_best_fit_signed_in_model_and_falls_back_to
 
 def test_image_routing_and_quality_are_saved_field_by_field(client: TestClient, settings: Settings, services: Services) -> None:
     out = client.get("/api/settings").json()
-    assert out["secondary"]["images"] == {"pitch": "auto", "design": "auto", "svg": "auto", "judge": "auto", "raster": True}
+    assert out["secondary"]["images"] == {"pitch": "auto", "design": "auto", "svg": "auto", "judge": "auto", "raster": True, "native_share": 0.5}
     assert out["image_quality"] == "lean"
     client.put("/api/settings", json={"secondary": {"images": {"svg": "codex"}}})
     saved = client.put("/api/settings", json={"secondary": {"images": {"raster": False}, "draft": "codex"}}).json()["secondary"]

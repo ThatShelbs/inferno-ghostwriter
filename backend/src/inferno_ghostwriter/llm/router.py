@@ -327,6 +327,11 @@ async def lead_provider(llm: LLM, task: str, images: list[bytes] | None = None) 
     return "claude"
 
 
+def chosen_image_model() -> ImageRoute | None:
+    """The model the author picked for this job (``image_model``), or None for the Settings routing."""
+    return _image_model.get()
+
+
 async def can_paint(llm: LLM) -> bool:
     """Whether ``llm`` can add a painted (raster) candidate now: GPT image generation is on and signed in."""
     check = getattr(llm, "can_paint", None)

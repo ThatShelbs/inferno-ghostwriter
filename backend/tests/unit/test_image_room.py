@@ -228,41 +228,74 @@ async def test_an_in_body_image_gets_ideas_candidates_and_finalists() -> None:
     assert drawn.provider == "claude-diagram" and "image sheet judge" in llm.tasks()
 
 
-async def test_gpt_paints_a_rival_for_illustrations_and_openers_only_when_painting_is_on() -> None:
-    llm = FakeLLM()
-    room = BodyRoom(llm, Settings())
-    ctx = body_context(kind="illustration")
-    ideas = await room.pitch(ctx, [], None)
-    await room.run(ideas, ctx, None)
-    assert "raster image" not in llm.tasks()  # off unless the author's GPT can paint
+def with_share(share: float) -> Settings:
+    settings = Settings()
+    settings.secondary.images.native_share = share
+    return settings
 
+
+async def test_native_generation_replaces_drawing_for_a_slot_and_never_adds_a_rival() -> None:
+    ctx = body_context(kind="illustration")
+
+    # Claude only (GPT cannot generate): drawn as always.
+    llm = FakeLLM()
+    room = BodyRoom(llm, with_share(1))
+    await room.run(await room.pitch(ctx, [], None), ctx, None)
+    assert "raster image" not in llm.tasks() and "illustration image design" in llm.tasks()
+
+    # GPT signed in but the share is 0: still drawn.
     llm = FakeLLM()
     llm.painter = True
-    room = BodyRoom(llm, Settings())
-    ideas = await room.pitch(ctx, [], None)
-    drawn, _ = await room.run(ideas, ctx, None)
-    painted = [d for d in drawn.finalists if d.provider == "gpt-image"]
-    assert llm.tasks().count("raster image") == 1 and painted and (painted[0].width, painted[0].height) == (1600, 900)
+    room = BodyRoom(llm, with_share(0))
+    await room.run(await room.pitch(ctx, [], None), ctx, None)
+    assert "raster image" not in llm.tasks() and "illustration image design" in llm.tasks()
+
+    # Share 1: the slot is generated natively and Claude draws nothing for it (no rival alongside).
+    llm = FakeLLM()
+    llm.painter = True
+    room = BodyRoom(llm, with_share(1))
+    drawn, _ = await room.run(await room.pitch(ctx, [], None), ctx, None)
+    assert llm.tasks().count("raster image") >= 1 and "illustration image design" not in llm.tasks()
+    assert drawn.provider == "gpt-image" and (drawn.width, drawn.height) == (1600, 900)
     paint_prompt = next(c["prompt"] for c in llm.calls if c["task"] == "raster image")
     assert "no" in paint_prompt.lower() and "words" in paint_prompt and "ghost" in paint_prompt
-    # An edit of a painting paints again from its stored prompt, shown the current picture.
-    edited = await room.repaint(painted[0].spec, "make it night", painted[0].png, None)
+    # An edit of a native image generates again from its stored prompt, shown the current picture.
+    edited = await room.repaint(drawn.spec, "make it night", drawn.png, None)
     assert edited.provider == "gpt-image" and llm.calls[-1]["images"] == 1 and "make it night" in llm.calls[-1]["prompt"]
-    # Diagrams are never painted.
+
+    # Diagrams are never generated natively.
     llm.calls.clear()
-    ideas = await room.pitch(body_context(), [], None)
-    await room.run(ideas, body_context(), None)
+    await room.run(await room.pitch(body_context(), [], None), body_context(), None)
+    assert "raster image" not in llm.tasks()
+
+    # A failed generation falls back to Claude drawing the same pitches.
+    class Failing(FakeLLM):
+        async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: Any = None) -> bytes:
+            raise LLMError("no image")
+
+    llm = Failing()
+    llm.painter = True
+    room = BodyRoom(llm, with_share(1))
+    drawn, _ = await room.run(await room.pitch(ctx, [], None), ctx, None)
+    assert drawn.provider != "gpt-image" and "illustration image design" in llm.tasks()
+
+
+async def test_an_opener_is_native_or_drawn_never_both() -> None:
+    llm = FakeLLM()
+    llm.painter = True
+    opening = OpeningRoom(llm, with_share(0), MemeMaker(llm, with_share(0)))
+    await opening.make("", opening_context(), ART)
     assert "raster image" not in llm.tasks()
 
     llm = FakeLLM()
     llm.painter = True
-    opening = OpeningRoom(llm, Settings(), MemeMaker(llm, Settings()))
+    opening = OpeningRoom(llm, with_share(1), MemeMaker(llm, with_share(1)))
     result = await opening.make("", opening_context(), ART)
     state = load_opening_state(result.spec)
-    assert state is not None and llm.tasks().count("raster image") == 1
-    assert len(state["review"]["candidates"]) == 4  # three built + one painted
-    if result.provider == "gpt-image":
-        assert state["medium"] == "raster" and state["prompt"]
+    assert state is not None
+    candidates = len(state["review"]["candidates"])
+    assert llm.tasks().count("raster image") == candidates  # every candidate is native, none drawn alongside
+    assert result.provider == "gpt-image" and state["medium"] == "raster" and state["prompt"]
 
 
 # -- story: anchors, angle cards, references -------------------------------------------------------------------------

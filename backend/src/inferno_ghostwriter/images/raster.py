@@ -1,9 +1,11 @@
-"""Painted candidates: GPT's own image generation (through the author's Codex sign-in) as a rival to Claude's SVG.
+"""Native images: GPT's own image generation (through the author's Codex sign-in) in place of Claude's SVG.
 
-A painted picture joins the same judge sheet as the drawn ones, so the judge decides per slot whether a vector
-drawing or a painting tells the story better. Code writes the painting prompt from the pitch (palette, house cast,
-no words in the picture: captions and credits stay on the image page) and fits the result to the slot. Nothing
-here runs unless the author has GPT signed in and painting on (``Settings.secondary.images.raster``).
+Some slots (``use_native``: ``native_share`` of the eligible ones) are made by GPT from a prompt instead of being
+drawn by Claude; the slot is one or the other, never both. Its candidates are all native and go through the same
+judge sheet as drawn ones. Code writes the prompt from the writer-room pitch (palette, house cast, no words in the
+picture: captions and credits stay on the image page) and fits the result to the slot. A generation that fails
+falls back to Claude drawing the same pitch. Nothing here runs unless the author has GPT signed in and the
+feature on (``Settings.secondary.images.raster``).
 
 A painting has no spec to edit, so an edit or a redraw paints again from the stored prompt, showing GPT the
 current picture when the author asked for a change.
@@ -11,16 +13,18 @@ current picture when the author asked for a change.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 from typing import Any
 
 from PIL import Image
 
+from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.palettes import Scheme
 from inferno_ghostwriter.llm import LLM, LLMError
 from inferno_ghostwriter.llm.base import UsageSink
-from inferno_ghostwriter.llm.router import can_paint
+from inferno_ghostwriter.llm.router import can_paint, chosen_image_model
 
 PROVIDER = "gpt-image"
 TOOL_LABEL = "GPT image generation (ChatGPT)"
@@ -32,6 +36,26 @@ RULES = (
     "No real people, celebrities, brands or other people's characters. When a character helps, use a friendly, round, "
     "white cartoon ghost (never scary) or simple, faceless people."
 )
+
+
+def _roll(seed: str) -> float:
+    """A stable number in [0, 1) for ``seed``: the same slot always gets the same answer."""
+    return int(hashlib.sha256(seed.encode()).hexdigest()[:8], 16) / 0x100000000
+
+
+async def use_native(llm: LLM, settings: Settings, seed: str) -> bool:
+    """Whether this slot is generated natively by GPT instead of drawn by Claude. Never both for one slot.
+
+    False without a signed-in GPT (Claude-only behaves as always). An author's per-image choice of ChatGPT forces
+    it; Claude or Gemini (``can_paint`` is then off) force a drawing. Otherwise ``native_share`` of the eligible
+    slots are native, picked by a stable hash of ``seed``.
+    """
+    if not await can_paint(llm):
+        return False
+    if chosen_image_model() == "codex":
+        return True
+    share = settings.secondary.images.native_share
+    return share > 0 and _roll(seed) < share
 
 
 def prompt_for(subject: str, *, scheme: Scheme | None = None, palette: tuple[str, ...] = (), extra: str = "", wide: bool = True) -> str:
