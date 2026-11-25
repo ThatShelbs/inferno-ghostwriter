@@ -12,6 +12,7 @@ from PIL import Image
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import T, UsageSink
+from inferno_ghostwriter.llm.router import lead_provider
 from inferno_ghostwriter.llm.secondary import MODEL_IDS
 
 log = logging.getLogger(__name__)
@@ -34,9 +35,10 @@ async def guest_pitches(
             log.info("Guest pitches from %s skipped: %s", model, exc)
             return None
 
+    lead = await lead_provider(llm, task)  # the model already pitching through image routing does not pitch twice
     return [
         ideas
-        for ideas in await asyncio.gather(*(ask(MODEL_IDS[p]) for p in dict.fromkeys(settings.secondary.ideation)))
+        for ideas in await asyncio.gather(*(ask(MODEL_IDS[p]) for p in dict.fromkeys(settings.secondary.ideation) if p != lead))
         if ideas is not None
     ]
 

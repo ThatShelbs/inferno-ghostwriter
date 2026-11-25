@@ -921,7 +921,7 @@ def get_format(format_id: str) -> MemeFormat | None:
 
 
 def menu(only: str | None = None) -> str:
-    """The format menu for the ideation prompt."""
+    """The format menu for the ideation prompt (famous formats by name; :func:`build_spec` describes the look)."""
     lines = []
     for family, label in FAMILIES.items():
         formats = [f for f in FORMATS if f.family == family and (only is None or f.id == only)]
@@ -933,9 +933,7 @@ def menu(only: str | None = None) -> str:
             data = f" Chart data: {f.data}" if f.data else ""
             fits = f" Fits: {', '.join(f.fit_tags)}." if f.fit_tags else ""
             cast = _cast_line(f)
-            lines.append(
-                f"- `{f.id}`: **{f.name}**. Use for: {f.when_to_use} Looks like: {f.recognizable}{fits} Text slots: {slots}.{data}{cast}"
-            )
+            lines.append(f"- `{f.id}`: **{f.name}**. Use for: {f.when_to_use}{fits} Text slots: {slots}.{data}{cast}")
         lines.append("")
     return "\n".join(lines).strip()
 

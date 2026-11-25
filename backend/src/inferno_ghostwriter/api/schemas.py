@@ -72,6 +72,7 @@ class SettingsOut(BaseModel):
     humanize_rounds: int
     reference_max_searches: int
     check_reference_links: bool
+    image_quality: Literal["lean", "max"]
     image_tool_label: str
     data_dir: str
     seed_samples_dir: str
@@ -91,6 +92,7 @@ class SettingsIn(BaseModel):
     humanize_rounds: int | None = Field(None, ge=0, le=2)
     reference_max_searches: int | None = Field(None, ge=1, le=8)
     check_reference_links: bool | None = None
+    image_quality: Literal["lean", "max"] | None = None
 
 
 # -- personas / samples / voice ----------------------------------------------------

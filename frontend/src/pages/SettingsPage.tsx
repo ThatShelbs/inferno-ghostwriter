@@ -80,6 +80,16 @@ function AdvancedCard() {
           <option value={2}>2 passes</option>
         </Select>
       </Field>
+      <Field
+        label="Image candidates"
+        hint="Lean builds the three best pitches in different styles and refines only a weak winner. Max quality builds every pitch and refines every finalist: more to choose from, several times the model calls."
+        htmlFor="image-quality"
+      >
+        <Select id="image-quality" value={settings.image_quality} onChange={(e) => update.mutate({ image_quality: e.target.value as 'lean' | 'max' })}>
+          <option value="lean">Lean (default)</option>
+          <option value="max">Max quality</option>
+        </Select>
+      </Field>
       <div className="flex items-center justify-between gap-4">
         <div>
           <p className="font-semibold">Refusal fallback</p>

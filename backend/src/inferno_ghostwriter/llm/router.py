@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from typing import Literal
 
-from inferno_ghostwriter.config import SecondaryProvider, Settings, WritingProvider
+from inferno_ghostwriter.config import ImageRoute, SecondaryProvider, Settings, WritingProvider
 from inferno_ghostwriter.llm.base import (
     LLM,
     LLMError,
@@ -20,6 +21,7 @@ from inferno_ghostwriter.llm.base import (
     T,
     UsageSink,
 )
+from inferno_ghostwriter.llm.ledger import tap
 from inferno_ghostwriter.llm.secondary import MODEL_IDS, SecondaryCLI
 
 log = logging.getLogger(__name__)
@@ -39,6 +41,33 @@ FALLBACK_TASKS = {
     "opening ideas",
     "meme ideas",
 }
+
+
+ImageCategory = Literal["pitch", "design", "svg", "judge"]
+# What `auto` tries first for each kind of image work, best fit first; Claude is always the last resort.
+AUTO_IMAGE: dict[ImageCategory, list[SecondaryProvider]] = {
+    "pitch": ["codex", "gemini"],
+    "design": ["codex", "gemini"],
+    "judge": ["codex"],
+    "svg": [],
+}
+
+
+def image_category(task: str) -> ImageCategory | None:
+    """The kind of image work a task name stands for (see ``config.ImageRouting``), or None for other work."""
+    if task in ("opening ideas", "meme ideas", "image improvement plan") or task.endswith(" image ideas"):
+        return "pitch"
+    if task in ("image pitch judge", "image sheet judge"):
+        return "judge"
+    if (
+        task in ("chart image design", "chart image edit", "diagram design", "opening data art")
+        or task.startswith("meme edit (")
+        or (task.startswith("opening ") and task.endswith(" build"))
+    ):
+        return "design"
+    if task.endswith((" image design", " image edit")) or (task.startswith("opening ") and task.endswith(" drawing")):
+        return "svg"
+    return None
 
 
 class RoutingLLM:
@@ -69,6 +98,22 @@ class RoutingLLM:
             stage = "tweak"
         return getattr(self.settings.secondary, stage) if stage is not None else "claude"
 
+    async def image_route(self, task: str, images: list[bytes] | None = None) -> list[SecondaryProvider]:
+        """The optional models to try, in order, for one piece of image work before Claude."""
+        category = image_category(task)
+        if category is None:
+            return []
+        choice: ImageRoute = getattr(self.settings.secondary.images, category)
+        if choice == "claude":
+            return []
+        if choice != "auto":
+            return [choice] if choice in self.secondary and (not images or choice == "codex") else []
+        return [
+            provider
+            for provider in AUTO_IMAGE[category]
+            if provider in self.secondary and (not images or provider == "codex") and await self.secondary[provider].signed_in()
+        ]
+
     def _fallback(self, task: str, images: list[bytes] | None) -> list[SecondaryProvider]:
         if task not in FALLBACK_TASKS and not task.startswith(("ideas ", "passage ")):
             return []
@@ -98,7 +143,7 @@ class RoutingLLM:
         usage: UsageSink | None = None,
     ) -> T:
         cli = await self._connected_cli(provider)
-        result = await cli.complete(system=system, prompt=prompt, schema=schema, images=images, usage=usage)
+        result = await cli.complete(system=system, prompt=prompt, schema=schema, images=images, usage=tap(usage, provider, task))
         if not isinstance(result, schema):
             raise LLMError(f"{cli.label} returned an invalid {task} response.")
         return result
@@ -123,15 +168,16 @@ class RoutingLLM:
                 explicit, task=task, system=system, prompt=prompt, schema=schema, images=images, usage=usage
             )
         preferred = self._preferred(task)
-        if preferred != "claude":
+        first = [preferred] if preferred != "claude" else await self.image_route(task, images)
+        for provider in first:
             try:
                 return await self._secondary_structured(
-                    preferred, task=task, system=system, prompt=prompt, schema=schema, images=images, usage=usage
+                    provider, task=task, system=system, prompt=prompt, schema=schema, images=images, usage=usage
                 )
             except LLMRefusalError:
                 raise
             except LLMError as exc:
-                log.info("Secondary %s unavailable during %s: %s", preferred, task, exc)
+                log.info("Secondary %s unavailable during %s: %s", provider, task, exc)
         try:
             return await self.active.structured(
                 task=task,
@@ -140,13 +186,13 @@ class RoutingLLM:
                 schema=schema,
                 effort=effort,
                 max_tokens=max_tokens,
-                usage=usage,
+                usage=tap(usage, "claude", task),
                 images=images,
                 model=model,
             )
         except LLMLimitError:
             for provider in self._fallback(task, images):
-                if provider == preferred:
+                if provider in first:
                     continue
                 try:
                     return await self._secondary_structured(
@@ -178,7 +224,7 @@ class RoutingLLM:
         async def secondary_text(provider: SecondaryProvider) -> str | None:
             try:
                 cli = await self._connected_cli(provider)
-                value = await cli.complete(system=system, prompt=prompt, usage=usage)
+                value = await cli.complete(system=system, prompt=prompt, usage=tap(usage, provider, task))
             except LLMRefusalError:
                 raise
             except LLMError as exc:
@@ -209,7 +255,7 @@ class RoutingLLM:
                 effort=effort,
                 max_tokens=max_tokens,
                 on_delta=delta if on_delta and fallback else on_delta,
-                usage=usage,
+                usage=tap(usage, "claude", task),
             )
         except LLMLimitError:
             # The preview is append-only. Do not append another provider's draft to a partial Claude draft.
@@ -218,6 +264,17 @@ class RoutingLLM:
                     if (result := await secondary_text(provider)) is not None:
                         return result
             raise
+
+    async def can_paint(self) -> bool:
+        codex = self.secondary.get("codex")
+        return bool(self.settings.secondary.images.raster and codex is not None and await codex.signed_in())
+
+    async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: UsageSink | None = None) -> bytes:
+        """A picture from GPT image generation (see ``SecondaryCLI.paint``); raises LLMError when it is unavailable."""
+        if not await self.can_paint():
+            raise LLMError("GPT image generation is off or not signed in.")
+        cli = await self._connected_cli("codex")
+        return await cli.paint(prompt, images=images, usage=tap(usage, "codex", "raster image"))
 
     async def research(
         self,
@@ -228,4 +285,22 @@ class RoutingLLM:
         max_searches: int = 8,
         usage: UsageSink | None = None,
     ) -> ResearchResult:
-        return await self.active.research(system=system, prompt=prompt, effort=effort, max_searches=max_searches, usage=usage)
+        return await self.active.research(
+            system=system, prompt=prompt, effort=effort, max_searches=max_searches, usage=tap(usage, "claude", "web research")
+        )
+
+
+async def lead_provider(llm: LLM, task: str, images: list[bytes] | None = None) -> str:
+    """Who answers ``task`` first through ``llm``: an optional model's id when image routing sends it there, else
+    "claude" (any other LLM, such as the demo's, counts as Claude)."""
+    if isinstance(llm, RoutingLLM):
+        route = await llm.image_route(task, images)
+        if route:
+            return route[0]
+    return "claude"
+
+
+async def can_paint(llm: LLM) -> bool:
+    """Whether ``llm`` can add a painted (raster) candidate now: GPT image generation is on and signed in."""
+    check = getattr(llm, "can_paint", None)
+    return bool(check and await check())

@@ -88,6 +88,8 @@ class FakeLLM:
         self.showcase = showcase
         self.calls: list[dict[str, Any]] = []
         self._reference_numbers = itertools.count(1)
+        # Tests turn this on to stand in for GPT image generation (painted candidates); off, nothing is painted.
+        self.painter = False
         # Seconds between streamed chunks; demo mode uses a small delay so streaming is visible.
         self.delay = delay
 
@@ -151,6 +153,19 @@ class FakeLLM:
         if usage:
             usage({"input_tokens": 1000, "output_tokens": 500, "requests": 1})
         return text
+
+    async def can_paint(self) -> bool:
+        return self.painter
+
+    async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: UsageSink | None = None) -> bytes:
+        """A flat stand-in picture, 1672x941 like the real thing, in the first colour the prompt names."""
+        self.calls.append({"kind": "paint", "task": "raster image", "prompt": prompt, "images": len(images or [])})
+        found = re.search(r"#[0-9a-fA-F]{6}", prompt)
+        out = io.BytesIO()
+        Image.new("RGB", (1672, 941), found.group(0) if found else "#f98e09").save(out, format="PNG")
+        if usage:
+            usage({"input_tokens": 200, "output_tokens": 20, "requests": 1})
+        return out.getvalue()
 
     async def research(
         self,

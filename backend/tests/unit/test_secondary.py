@@ -184,3 +184,56 @@ def test_optional_settings_persist_and_auth_stays_local(client: TestClient, sett
         assert local.post("/api/auth/secondary/codex/login", json={}).status_code == 409
         assert local.post("/api/auth/secondary/codex/login", json={}, headers={"host": "example.com"}).status_code == 409
     assert client.get("/api/auth/secondary").json()[0]["installed"] is False
+
+
+async def test_image_work_goes_to_the_best_fit_signed_in_model_and_falls_back_to_claude(settings: Settings) -> None:
+    from inferno_ghostwriter.llm.router import image_category
+
+    assert image_category("meme ideas") == "pitch" and image_category("chart image ideas") == "pitch"
+    assert image_category("opening cheat_grid build") == "design" and image_category("meme edit (drake)") == "design"
+    assert image_category("illustration image design") == "svg" and image_category("opening editorial drawing") == "svg"
+    assert image_category("image sheet judge") == "judge" and image_category("draft") is None
+
+    claude = FakeLLM()
+    claude.structured = AsyncMock(return_value=Answer(word="claude"))
+    codex = SecondaryCLI("codex", discover=False)
+    codex.signed_in = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    codex.complete = AsyncMock(return_value=Answer(word="codex"))
+    gemini = SecondaryCLI("gemini", discover=False)  # not verified: auto skips it
+    gemini.complete = AsyncMock(return_value=Answer(word="gemini"))
+    router = RoutingLLM(settings, api=claude, subscription=claude, secondary={"codex": codex, "gemini": gemini})
+    request = dict(system=[], prompt="Example", schema=Answer, effort="medium")
+
+    assert (await router.structured(task="meme ideas", **request)).word == "codex"
+    assert (await router.structured(task="image sheet judge", images=[b"png"], **request)).word == "codex"
+    assert (await router.structured(task="illustration image design", **request)).word == "claude"  # hand-drawn SVG stays
+    gemini.complete.assert_not_awaited()
+
+    codex.complete.side_effect = LLMError("Codex is busy")
+    assert (await router.structured(task="chart image design", **request)).word == "claude"
+
+    codex.signed_in.return_value = False
+    codex.complete.reset_mock()
+    assert (await router.structured(task="opening ideas", **request)).word == "claude"
+    codex.complete.assert_not_awaited()
+
+    settings.secondary.images.pitch = "claude"
+    codex.signed_in.return_value = True
+    assert (await router.structured(task="opening ideas", **request)).word == "claude"
+
+
+def test_image_routing_and_quality_are_saved_field_by_field(client: TestClient, settings: Settings, services: Services) -> None:
+    out = client.get("/api/settings").json()
+    assert out["secondary"]["images"] == {"pitch": "auto", "design": "auto", "svg": "auto", "judge": "auto", "raster": True}
+    assert out["image_quality"] == "lean"
+    client.put("/api/settings", json={"secondary": {"images": {"svg": "codex"}}})
+    saved = client.put("/api/settings", json={"secondary": {"images": {"raster": False}, "draft": "codex"}}).json()["secondary"]
+    assert saved["images"]["svg"] == "codex" and saved["images"]["raster"] is False and saved["draft"] == "codex"
+    assert settings.secondary.images.svg == "codex"  # a model, not a plain dict, so the router can read it
+    assert client.put("/api/settings", json={"image_quality": "max"}).json()["image_quality"] == "max"
+    assert settings.image_builds == 6 and settings.image_body_candidates == 3 and settings.image_refine == 3
+    disk = Settings(data_dir=settings.data_dir, _env_file=None)
+    load_runtime_settings(services.engine, disk)
+    assert disk.image_quality == "max" and disk.image_builds == 6 and disk.secondary.images.svg == "codex"
+    client.put("/api/settings", json={"image_quality": "lean"})
+    assert settings.image_builds == 3 and settings.image_refine_below == 8.0

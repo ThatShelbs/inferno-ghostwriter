@@ -105,7 +105,7 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     assert meme["room"]["ideas_left"] == 3 and len(meme["finalists"]) == 3 and meme["finalists"][0]["current"]
     # Every image has the same room: the in-body diagram has ideas and finalists too.
     diagram = project["images"][1]
-    assert diagram["room"]["room"] == "body" and len(diagram["room"]["pitches"]) == 4 and len(diagram["finalists"]) == 3
+    assert diagram["room"]["room"] == "body" and len(diagram["room"]["pitches"]) == 4 and len(diagram["finalists"]) == 2
     assert "(illustrative data)" in project["images"][2]["caption"]
     # AI-generation detection ran (scan + judge) and the editor saw the scan's findings.
     report = project["authenticity"]
@@ -664,8 +664,8 @@ def test_an_image_that_cannot_be_drawn_gets_one_more_try(client: TestClient, sam
 
     assert {img["kind"]: img["status"] for img in project["images"]}["diagram"] == "ready"
     diagrams = [c for c in fake_llm.calls if c["task"] == "diagram image design"]
-    # Three ideas are drawn at once; the broken one is asked again with the error quoted.
-    assert len(diagrams) == 3 and any("must be an <svg> document" in d["prompt"] for d in diagrams)
+    # Two ideas are drawn at once (a template fill and a freehand drawing); the broken drawing is asked again with the error quoted.
+    assert len(diagrams) == 2 and any("must be an <svg> document" in d["prompt"] for d in diagrams)
     # Each drawing is told what the rest of the set shows.
     assert "The other images in this post" in diagrams[0]["prompt"] and "- hero `hero`:" in diagrams[0]["prompt"]
 

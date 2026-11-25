@@ -603,6 +603,14 @@ export interface ImageRoomOut {
   sources?: SourceOut[];
 }
 
+export interface ImageRouting {
+  pitch?: "auto" | "claude" | "codex" | "gemini";
+  design?: "auto" | "claude" | "codex" | "gemini";
+  svg?: "auto" | "claude" | "codex" | "gemini";
+  judge?: "auto" | "claude" | "codex" | "gemini";
+  raster?: boolean;
+}
+
 export interface ImageUpdate {
   caption?: string | null;
   alt?: string | null;
@@ -1056,6 +1064,7 @@ export interface SecondarySettings {
   fallback?: ("codex" | "gemini")[];
   judges?: ("codex" | "gemini")[];
   ideation?: ("codex" | "gemini")[];
+  images?: ImageRouting;
 }
 
 export interface SecondaryStatusOut {
@@ -1084,6 +1093,7 @@ export interface SettingsIn {
   humanize_rounds?: number | null;
   reference_max_searches?: number | null;
   check_reference_links?: boolean | null;
+  image_quality?: "lean" | "max" | null;
 }
 
 export interface SettingsOut {
@@ -1097,6 +1107,7 @@ export interface SettingsOut {
   humanize_rounds: number;
   reference_max_searches: number;
   check_reference_links: boolean;
+  image_quality: "lean" | "max";
   image_tool_label: string;
   data_dir: string;
   seed_samples_dir: string;

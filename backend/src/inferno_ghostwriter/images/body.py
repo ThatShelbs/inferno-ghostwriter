@@ -24,12 +24,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from inferno_ghostwriter.config import Settings
+from inferno_ghostwriter.images import raster
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.diagrams import TEMPLATES, DiagramSpec, render_diagram_png
 from inferno_ghostwriter.images.diagrams import menu as diagram_menu
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
-from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches
+from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches, to_refine
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import Scheme
 from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
@@ -192,8 +193,13 @@ class BodyRoom:
         concepts = ideas["concepts"]
         count = max(1, self.settings.image_body_candidates)
         picks = [i for i in range(len(concepts)) if i not in set(ideas.get("tried", []))][:count] or [0]
-        results = await asyncio.gather(*(self._safe_draw(concepts[i], ctx, "", usage) for i in picks))
+        results, painted = await asyncio.gather(
+            asyncio.gather(*(self._safe_draw(concepts[i], ctx, "", usage) for i in picks)), self._painted(concepts[picks[0]], ctx, usage)
+        )
         options = [(i, d) for i, d in zip(picks, results, strict=True) if d is not None]
+        if painted is not None:
+            # GPT paints the best idea as a rival to Claude's drawing; the judge picks between them.
+            options.append((picks[0], painted))
         if not options:
             raise ImageProviderError("None of the ideas for this image could be drawn. Click Redraw to try again.")
         keep = max(1, self.settings.image_finalists)
@@ -204,7 +210,7 @@ class BodyRoom:
             self.llm,
             self.settings,
             context=f"An in-body {ctx.kind} for the post '{ctx.title}'. Its job: {ctx.purpose}\nAround it:\n{ctx.context[:3000]}",
-            candidates=[concept_text(concepts[i]) for i, _ in options],
+            candidates=[concept_text(concepts[i]) + (" (painted)" if d.provider == raster.PROVIDER else "") for i, d in options],
             pngs=[thumbnail_png(d.png) for _, d in options],
             references=[*(load_png(refs, 512) if refs else []), *([ctx.reference] if ctx.reference else [])],
             reference_note="the author's own diagrams: the quality and style to aim for",
@@ -215,10 +221,17 @@ class BodyRoom:
             for k, (i, d) in enumerate(options):
                 d.score, d.reads_as = round(sheet.scores[k], 2), sheet.reads_as[k]
                 concepts[i]["reads_as"] = sheet.reads_as[k]
-            best_k = order[0]
-            if sheet.fixes[best_k]:
+            for best_k in to_refine(sheet.scores, order, self.settings):
+                if not sheet.fixes[best_k]:
+                    continue
                 i, current = options[best_k]
-                fixed = await self._safe_draw(concepts[i], ctx, self._fix_note(sheet.fixes[best_k], current), usage)
+                if current.provider == raster.PROVIDER:
+                    try:
+                        fixed: Drawn | None = await self.repaint(current.spec, sheet.fixes[best_k], current.png, usage)
+                    except ImageProviderError:
+                        fixed = None
+                else:
+                    fixed = await self._safe_draw(concepts[i], ctx, self._fix_note(sheet.fixes[best_k], current), usage)
                 if fixed is not None:
                     fixed.score, fixed.reads_as = current.score, current.reads_as
                     options[best_k] = (i, fixed)
@@ -227,12 +240,47 @@ class BodyRoom:
         finalists = []
         for k in order:
             i, d = options[k]
-            d.label = concepts[i].get("hook") or concepts[i].get("concept", "")
+            d.label = (concepts[i].get("hook") or concepts[i].get("concept", "")) + (
+                " (painted by GPT)" if d.provider == raster.PROVIDER else ""
+            )
             finalists.append((i, d))
         ideas["tried"] = sorted({*ideas.get("tried", []), *(i for i, _ in options)})
         winner_index, winner = finalists[0]
         winner.finalists = [d for _, d in finalists] if len(finalists) > 1 else []
         return winner, winner_index
+
+    async def _painted(self, idea: dict[str, Any], ctx: BodyContext, usage: UsageSink | None) -> Drawn | None:
+        """A painted rival for an illustration (None for other kinds, or when painting is off or fails)."""
+        if ctx.kind != "illustration" or idea.get("kind", "illustration") != "illustration":
+            return None
+        subject = f"An illustration for a blog post titled '{ctx.title}'. Its job: {ctx.purpose}\n{concept_text(idea)}"
+        extra = "\n".join(
+            x for x in (ctx.visual_style and f"Visual style: {ctx.visual_style}", ctx.note and f"The author asked: {ctx.note}") if x
+        )
+        prompt = raster.prompt_for(subject, scheme=ctx.scheme, palette=ctx.palette, extra=extra)
+        png = await raster.paint(self.llm, prompt, size=(1600, 900), images=[ctx.reference] if ctx.reference else None, usage=usage)
+        if png is None:
+            return None
+        alt = str(idea.get("reader_takeaway") or idea.get("concept") or ctx.purpose)
+        return Drawn(png, 1600, 900, raster.PROVIDER, raster.spec(prompt, alt=alt), alt, "")
+
+    async def repaint(self, spec: str, instruction: str, current: bytes | None, usage: UsageSink | None) -> Drawn:
+        """Paint a painting again from its stored prompt. With ``current`` (an edit, or the judge's fix) GPT changes
+        that picture as ``instruction`` asks and keeps the rest; without it (a redraw) ``instruction`` is the twist."""
+        stored = raster.load(spec) or {}
+        base = str(stored.get("prompt") or "")
+        if not base:
+            raise ImageProviderError("This painting has no stored prompt. Redraw it instead.")
+        prompt, note, shown = base, instruction.strip(), None
+        if note and current is not None:
+            prompt, shown = f"{base}\nChange the attached picture as follows and keep everything else exactly as it is: {note}", [current]
+        elif note:
+            prompt = f"{base}\n{note}"
+        png = await raster.paint(self.llm, prompt, size=(1600, 900), images=shown, usage=usage)
+        if png is None:
+            raise ImageProviderError("GPT image generation is unavailable. Sign in to Codex in Settings, or Redraw to let Claude draw it.")
+        # The stored prompt stays the original: an edit changes the picture, not what it is of.
+        return Drawn(png, 1600, 900, raster.PROVIDER, raster.spec(base, alt=stored.get("alt", "")), str(stored.get("alt") or ""), "")
 
     @staticmethod
     def _fix_note(fix: str, current: Drawn) -> str:

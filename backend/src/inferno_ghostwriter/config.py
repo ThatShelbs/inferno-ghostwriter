@@ -41,6 +41,23 @@ SecondaryProvider = Literal["codex", "gemini"]
 WritingProvider = Literal["claude", "codex", "gemini"]
 
 
+ImageRoute = Literal["auto", "claude", "codex", "gemini"]
+
+
+class ImageRouting(BaseModel):
+    """Which model does each kind of image work. ``auto`` picks by fit among the signed-in optional models and
+    falls back to Claude: pitches (text) and JSON specs (charts, diagram/template fills, art settings, meme
+    restages) go to GPT or Gemini, the vision judge to GPT (it can see the pictures), and hand-drawn SVG
+    (editorial, illustration, icon, screenshot) stays with Claude while GPT paints a raster rival for the judge."""
+
+    pitch: ImageRoute = "auto"
+    design: ImageRoute = "auto"
+    svg: ImageRoute = "auto"
+    judge: ImageRoute = "auto"
+    # GPT's own image generation adds a painted candidate for openings and illustrations (Codex only).
+    raster: bool = True
+
+
 class SecondarySettings(BaseModel):
     draft: WritingProvider = "claude"
     critique: WritingProvider = "claude"
@@ -49,6 +66,7 @@ class SecondarySettings(BaseModel):
     fallback: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
     judges: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
     ideation: list[SecondaryProvider] = Field(default_factory=list, max_length=2)
+    images: ImageRouting = Field(default_factory=ImageRouting)
 
 
 class Settings(BaseSettings):
@@ -90,8 +108,27 @@ class Settings(BaseSettings):
     # best `image_finalists`, each is refined with the judge's fix, and the author picks between them.
     image_candidates: int = 6
     # The same for an in-body image (diagram, chart, illustration, screenshot, icon).
-    image_body_candidates: int = 3
+    image_body_candidates: int = 2
     image_finalists: int = 3
+    # Of the pitched opening concepts, build this many (the best of different styles); the rest stay as Ideas.
+    # Code-drawn memes are all drawn, since drawing them costs no model call.
+    image_builds: int = 3
+    # Refine this many of the judge's best with its fix, and only when the score is below `image_refine_below`
+    # (1-10; most pictures score 4-7). A finalist that is not refined is shown as built.
+    image_refine: int = 1
+    image_refine_below: float = 8.0
+    # "lean" (default): the fan-out above. "max": every pitched opener built, three in-body candidates and every
+    # finalist refined, as before the lean room (more pictures to choose from, several times the model calls).
+    image_quality: Literal["lean", "max"] = "lean"
+
+    def apply_image_quality(self) -> None:
+        """Set the room's fan-out from ``image_quality`` (called when the setting is loaded or changed)."""
+        lean = self.image_quality == "lean"
+        self.image_builds = 3 if lean else 6
+        self.image_body_candidates = 2 if lean else 3
+        self.image_refine = 1 if lean else 3
+        self.image_refine_below = 8.0 if lean else 11.0
+
     # The author's reference images (memes, data art, diagrams) the judge compares against; see images/references.py.
     image_reference_dir: Path = HOME_DIR / ("references" if FROZEN else "examples")
     # Web searches for the numbers behind a data opener (chart or big number).

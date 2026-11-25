@@ -27,7 +27,7 @@ from typing import Any
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
-from inferno_ghostwriter.images.judge import Ranking, judge_sheet, rank_pitches
+from inferno_ghostwriter.images.judge import Ranking, judge_sheet, rank_pitches, to_refine
 from inferno_ghostwriter.images.memes.compose import compose, scheme_for
 from inferno_ghostwriter.images.memes.formats import FALLBACK, FAMILIES, MemeFormat, build_spec, get_format, menu
 from inferno_ghostwriter.images.memes.settings import configure as configure_settings
@@ -45,7 +45,7 @@ from inferno_ghostwriter.images.palettes import Scheme, from_id
 from inferno_ghostwriter.images.palettes import pick as pick_colors
 from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
 from inferno_ghostwriter.images.remix import ImprovementPlan, Tweak, variation_for
-from inferno_ghostwriter.images.story import anchored, deal
+from inferno_ghostwriter.images.story import anchored, condense, deal
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import UsageSink
 from inferno_ghostwriter.prompts import raw, render
@@ -53,8 +53,8 @@ from inferno_ghostwriter.prompts import raw, render
 log = logging.getLogger(__name__)
 
 STATE_VERSION = 2
-POST_LIMIT = 24000
-POST_TAIL = 8000
+POST_LIMIT = 10000
+POST_TAIL = 3000
 MIN_PITCHES = 6
 MADE_UP = "(data: entirely made up)"
 OLD_MEME = "This meme was made by an older version; click New idea to make one that can be edited."
@@ -160,13 +160,20 @@ def plan_callbacks(plan: dict[str, Any] | None) -> str:
 
 
 def clip_post(markdown: str, limit: int = POST_LIMIT, tail: int = POST_TAIL) -> str:
-    """The post without image placeholders. A long post keeps its opening and its ending, where the callbacks pay off."""
+    """The post without image placeholders, at most about ``limit`` characters.
+
+    A long post is condensed by code (:func:`~inferno_ghostwriter.images.story.condense`: every section, each
+    paragraph's opening sentences) rather than cut, so the whole story arrives in fewer tokens. ``tail`` keeps
+    up to that many characters of the ending word for word, where the callbacks pay off.
+    """
     text = PLACEHOLDER_RE.sub("", markdown).strip()
     if len(text) <= limit:
         return text
     if tail <= 0:
-        return f"{text[:limit].rstrip()}\n\n[... the rest of the post is omitted ...]"
-    return f"{text[: limit - tail].rstrip()}\n\n[... the middle of the post is omitted ...]\n\n{text[-tail:].lstrip()}"
+        return condense(text, limit)
+    cut = text.find("\n\n", len(text) - tail)
+    head, end = (text[:cut], text[cut:].strip()) if cut > 0 else (text[:-tail], text[-tail:])
+    return f"{condense(head, max(limit - len(end), limit // 2))}\n\n[... the ending, word for word ...]\n\n{end}"
 
 
 def load_state(spec: str) -> dict[str, Any] | None:
@@ -464,7 +471,8 @@ class MemeMaker:
                         cand.built = fixed
                         cand.extra["refined"] = cand.fix
 
-            await asyncio.gather(*(refine(c) for c in best))
+            order = sheet.order()[:keep]
+            await asyncio.gather(*(refine(drawn[k]) for k in to_refine(sheet.scores, order, self.settings)))
         else:
             best = drawn[:keep]
             state["review"] = {"skipped": True, "note": "Ranked from the pitches (this connection cannot show Claude pictures)."}
@@ -694,7 +702,7 @@ class MemeMaker:
             f"{position_guide(post)}\n\nPost title: {post.title}\nHumor level {post.humor}/10: {humor_guide(post.humor)}\n"
             f"The author's sense of humor:\n<humor>\n{humor}\n</humor>\n"
             + (f"The author asked: {post.note}\n" if post.note else "")
-            + f"The post:\n<post>\n{clip_post(post.markdown, 9000, 0 if opening else 3000)}\n</post>"
+            + f"The post:\n<post>\n{clip_post(post.markdown, 6000, 0 if opening else 2000)}\n</post>"
         )
 
     def _direct(

@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError, T, UsageSink
+from inferno_ghostwriter.llm.router import lead_provider
 from inferno_ghostwriter.llm.secondary import MODEL_IDS
 from inferno_ghostwriter.prompts import raw, render
 
@@ -137,15 +138,23 @@ async def _review(
             log.info("%s failed on %s: %s", task, model_id or "Claude", exc)
             return None
 
+    # When image routing already sends the lead judgment to an optional model, it does not vote twice.
+    lead = await lead_provider(llm, task, images)
     guests = [
         MODEL_IDS[provider]
         for provider in dict.fromkeys(settings.secondary.judges)
-        if (not images or provider == "codex") and MODEL_IDS[provider] != model
+        if (not images or provider == "codex") and MODEL_IDS[provider] != model and provider != lead
     ]
     if not guests:
         return await ask(model, effort), []
     primary, *extra = await asyncio.gather(ask(model, effort), *(ask(model_id, "medium") for model_id in guests))
     return primary, [verdict for verdict in extra if verdict is not None]
+
+
+def to_refine(scores: Sequence[float], ranked: Sequence[int], settings: Settings) -> list[int]:
+    """The judge's best candidates worth another build with its fix: the top ``image_refine``, and only those
+    scoring below ``image_refine_below`` (a picture that already works is shown as built)."""
+    return [k for k in ranked[: max(0, settings.image_refine)] if scores[k] < settings.image_refine_below]
 
 
 def _blend(primary: float | None, guests: list[float], default: float) -> float:

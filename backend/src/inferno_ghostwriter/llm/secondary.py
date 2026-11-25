@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from inferno_ghostwriter.llm.base import LLMError, LLMImagesUnsupportedError, LL
 
 MODEL_IDS: dict[SecondaryProvider, str] = {"codex": "gpt-6.2-sol", "gemini": "gemini-4-argon-medium"}
 LABELS: dict[SecondaryProvider, str] = {"codex": "GPT-6.2 Sol (Medium)", "gemini": "Gemini 4 Argon (Medium)"}
+# How long a "signed in" answer from `codex login status` is trusted before asking again.
+SIGNED_IN_TTL = 600.0
 INSTALL_URLS: dict[SecondaryProvider, str] = {
     "codex": "https://developers.openai.com/codex/cli",
     "gemini": "https://antigravity.google/docs/cli-getting-started",
@@ -79,9 +82,13 @@ def _cli(provider: SecondaryProvider) -> list[str] | None:
     return next(([str(path)] for path in candidates if path.is_file()), None)
 
 
+def _codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+
+
 def _codex_auth_store() -> str:
     # Carry forward this one setting when inference ignores the user configuration.
-    config = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "config.toml"
+    config = _codex_home() / "config.toml"
     try:
         value = tomllib.loads(config.read_text(encoding="utf-8")).get("cli_auth_credentials_store")
     except (OSError, ValueError):
@@ -97,7 +104,9 @@ class SecondaryCLI:
         self._discover = discover
         self._login: subprocess.Popen[bytes] | None = None
         self.verified = False
-        self._slots = asyncio.Semaphore(2)
+        self._slots = asyncio.Semaphore(3)
+        # When `codex login status` last said yes (a check spawns a process; one per call added up).
+        self._signed_in_at = 0.0
 
     @property
     def command(self) -> list[str] | None:
@@ -114,6 +123,7 @@ class SecondaryCLI:
         if self.signing_in:
             return
         self.verified = False
+        self._signed_in_at = 0.0
         args = ["login", "-c", _CODEX_CHATGPT] if self.provider == "codex" else ["acp", "--login"]
         terminal = self.provider == "gemini"
         if terminal and os.name != "nt":
@@ -131,17 +141,22 @@ class SecondaryCLI:
         except OSError as exc:
             raise LLMError(f"Could not start {self.label} sign-in.") from exc
 
-    async def signed_in(self) -> bool:
+    async def signed_in(self, *, fresh: bool = False) -> bool:
+        """Whether this model can be used now. A yes from Codex is trusted for ``SIGNED_IN_TTL`` seconds."""
         if self.provider == "gemini":
             return self.verified
         command = self.command
         if command is None:
             return False
+        if not fresh and time.monotonic() - self._signed_in_at < SIGNED_IN_TTL:
+            return True
         try:
             status, out, err = await self._run([*command, "login", "status"], cwd=Path.home(), timeout=8)
         except LLMError:
             return False
-        return status == 0 and "logged in using chatgpt" in (out + err).decode(errors="replace").lower()
+        ok = status == 0 and "logged in using chatgpt" in (out + err).decode(errors="replace").lower()
+        self._signed_in_at = time.monotonic() if ok else 0.0
+        return ok
 
     async def test(self) -> None:
         self.verified = False
@@ -178,7 +193,7 @@ class SecondaryCLI:
             with tempfile.TemporaryDirectory(prefix="inferno-secondary-") as tmp:
                 cwd = Path(tmp)
                 if self.provider == "codex":
-                    payload, counters = await self._codex(command, cwd, request, schema, images, timeout)
+                    payload, counters, _ = await self._codex(command, cwd, request, schema, images, timeout)
                 else:
                     payload, counters = await self._gemini(command, cwd, request, schema, timeout)
         if usage and counters:
@@ -192,9 +207,43 @@ class SecondaryCLI:
             raise LLMError(f"{self.label} returned an empty response.")
         return payload
 
+    async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: UsageSink | None = None, timeout: float = 360) -> bytes:
+        """One picture from GPT's own image generation (Codex only), as PNG bytes. ``images`` are shown to it
+        first (a style reference, or the picture to change)."""
+        command = self.command
+        if self.provider != "codex" or command is None:
+            raise LLMError(f"{self.label} cannot paint pictures.")
+        request = (
+            "Use your image generation tool to create exactly one image as described below. Do not write code or files "
+            "yourself. When the image is made, reply only with the word done.\n\n<picture>\n" + prompt + "\n</picture>"
+        )
+        async with self._slots:
+            if not await self.signed_in():
+                raise LLMError("Sign in to Codex with ChatGPT in Settings before using GPT image generation.")
+            with tempfile.TemporaryDirectory(prefix="inferno-secondary-") as tmp:
+                _, counters, thread = await self._codex(command, Path(tmp), request, None, images, timeout, paint=True)
+        if usage and counters:
+            usage({key: counters[key] for key in ("input_tokens", "output_tokens", "cache_read_input_tokens") if key in counters})
+        folder = _codex_home() / "generated_images" / thread if thread else None
+        found = sorted(folder.glob("*.png"), key=lambda p: p.stat().st_mtime) if folder and folder.is_dir() else []
+        if not found or folder is None:
+            raise LLMError(f"{self.label} did not return a picture.")
+        png = found[-1].read_bytes()
+        shutil.rmtree(folder, ignore_errors=True)  # the app keeps its own copy; leave nothing behind in ~/.codex
+        return png
+
     async def _codex(
-        self, command: list[str], cwd: Path, request: str, schema: type[T] | None, images: list[bytes] | None, timeout: float
-    ) -> tuple[str, dict[str, int]]:
+        self,
+        command: list[str],
+        cwd: Path,
+        request: str,
+        schema: type[T] | None,
+        images: list[bytes] | None,
+        timeout: float,
+        *,
+        paint: bool = False,
+    ) -> tuple[str, dict[str, int], str]:
+
         args = [
             *command,
             "exec",
@@ -229,7 +278,7 @@ class SecondaryCLI:
             "plugins",
             "--disable",
             "multi_agent",
-            "--disable",
+            "--enable" if paint else "--disable",
             "image_generation",
         ]
         for index, image in enumerate(images or []):
@@ -243,8 +292,11 @@ class SecondaryCLI:
         messages = []
         counters: dict[str, int] = {}
         failed = False
+        thread = ""
         for line in stdout.splitlines():
             event = _object(line)
+            if event.get("type") == "thread.started":
+                thread = str(event.get("thread_id") or "")
             if event.get("type") == "item.completed":
                 item = event.get("item") or {}
                 if item.get("type") == "agent_message":
@@ -260,7 +312,7 @@ class SecondaryCLI:
         payload = messages[-1].strip()
         if schema and payload.startswith("```") and payload.endswith("```"):
             payload = payload.partition("\n")[2][:-3].strip()
-        return payload, counters
+        return payload, counters, thread
 
     async def _gemini(
         self, command: list[str], cwd: Path, request: str, schema: type[T] | None, timeout: float

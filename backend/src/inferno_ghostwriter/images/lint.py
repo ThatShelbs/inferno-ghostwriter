@@ -106,21 +106,32 @@ def lint(
     problems: list[str] = []
     removed = 0
 
+    # A reference to an id that was never defined is repaired here rather than sent back for a whole new design:
+    # a missing paint becomes a plain scheme colour, a missing filter/clip/mask/marker is dropped, and a <use> of
+    # nothing is removed. Figures from the library (``#fig-...``) are injected after the lint, so they count as defined.
     ids = {el.get("id") for el in root.iter() if isinstance(el.tag, str) and el.get("id")}
-    dangling: set[str] = set()
-    for el in root.iter():
+    plain = allowed_colors[len(allowed_colors) // 2] if allowed_colors else "#888888"
+    for el in list(root.iter()):
         if not isinstance(el.tag, str):
             continue
-        for value in el.attrib.values():
-            dangling.update(m for m in _REF.findall(value) if m not in ids and not m.startswith("fig-"))
-        href = el.get("href") or el.get("{http://www.w3.org/1999/xlink}href") or ""
-        # Figures from the library (``#fig-...``) are injected after the lint, so they count as defined.
-        if href.startswith("#") and href[1:] not in ids and not href.startswith("#fig-"):
-            dangling.add(href[1:])
-    if dangling:
-        problems.append(
-            f"These ids are referenced but never defined: {', '.join(sorted(dangling)[:6])}. Define them or remove the references."
-        )
+        for name, value in list(el.attrib.items()):
+            missing = [m for m in _REF.findall(value) if m not in ids and not m.startswith("fig-")]
+            if not missing:
+                continue
+            if name in ("fill", "stroke"):
+                el.set(name, plain if name == "fill" else "none")
+            elif name == "style":
+                el.set(name, _REF.sub(lambda m: m.group(0) if m.group(1) in ids else "none", value))
+            else:
+                del el.attrib[name]
+            removed += 1
+        href_key = "href" if el.get("href") is not None else "{http://www.w3.org/1999/xlink}href"
+        href = el.get(href_key) or ""
+        if _local(el) == "use" and href.startswith("#") and href[1:] not in ids and not href.startswith("#fig-"):
+            parent = el.getparent()
+            if parent is not None:
+                parent.remove(el)
+                removed += 1
 
     shapes = [el for el in root.iter() if _local(el) in SHAPES]
     if len(shapes) > budget:
