@@ -1,10 +1,12 @@
 import { ImagePlus, Lightbulb, RefreshCw, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 
+import type { ImageRoute } from '../../api/hooks'
 import type { ImageFormatOut, ImageRoomOut, PitchOut } from '../../api/types.gen'
 import { Badge, Button, Dialog, Field, Select, Textarea } from '../../components/ui'
 import { cx } from '../../lib/cx'
 import { rankPitches, scoreLabel } from '../../lib/imageRoom'
+import { ImageModelPicker } from './ImageModelPicker'
 
 const ROOM_TITLE: Record<string, string> = {
   opening: 'Opening image ideas',
@@ -27,21 +29,26 @@ export function ImageRoomDialog({
   referenceUrl,
   onReference,
   onClearReference,
+  models = [],
 }: {
   open: boolean
   onClose: () => void
   room: ImageRoomOut
   formats: ImageFormatOut[]
-  onPick: (index: number) => void
+  /** Each action also says who does the work ('auto' unless the author picked a model). */
+  onPick: (index: number, model: ImageRoute) => void
   /** Pitch new ideas, with the author's steer ('' for none). */
-  onPitch: (note: string) => void
-  onFormat: (id: string, note: string) => void
+  onPitch: (note: string, model: ImageRoute) => void
+  onFormat: (id: string, note: string, model: ImageRoute) => void
   /** The author's style reference for this image, if any, and how to set or clear it. */
   referenceUrl?: string | null
   onReference?: (file: File) => void
   onClearReference?: () => void
+  /** The models the author may choose from (empty: no optional model is signed in, so no choice is shown). */
+  models?: ImageRoute[]
 }) {
   const [note, setNote] = useState('')
+  const [model, setModel] = useState<ImageRoute>('auto')
   const fileInput = useRef<HTMLInputElement>(null)
   const ranked = rankPitches(room.pitches ?? [])
   const groups = [...new Set(formats.map((f) => f.group))]
@@ -57,11 +64,12 @@ export function ImageRoomDialog({
         {ranked.length === 0 && <p className="text-sm text-muted">No ideas are stored for this image yet. Pitch some below.</p>}
         <ul className="space-y-3" aria-label="Pitched ideas">
           {ranked.map((pitch) => (
-            <PitchCard key={pitch.index} pitch={pitch} onPick={() => onPick(pitch.index)} />
+            <PitchCard key={pitch.index} pitch={pitch} onPick={() => onPick(pitch.index, model)} />
           ))}
         </ul>
 
         <div className="space-y-3 border-t border-line pt-4">
+          <ImageModelPicker id="room-model" value={model} onChange={setModel} models={models} />
           <Field
             label="Steer the next round (optional)"
             hint="In your own words: 'fewer words', 'more like the original meme', 'about the deploy bit'."
@@ -70,7 +78,7 @@ export function ImageRoomDialog({
             <Textarea id="room-note" rows={2} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
           </Field>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" icon={<RefreshCw className="size-4" />} onClick={() => onPitch(note.trim())}>
+            <Button size="sm" icon={<RefreshCw className="size-4" />} onClick={() => onPitch(note.trim(), model)}>
               {(room.ideas_left ?? 0) > 0 && !note.trim() ? 'Next best idea' : 'Pitch new ideas'}
             </Button>
             {formats.length > 0 && (
@@ -78,7 +86,7 @@ export function ImageRoomDialog({
                 aria-label="Try another format"
                 className="h-8 w-64 max-w-full text-sm"
                 value=""
-                onChange={(e) => e.target.value && onFormat(e.target.value, note.trim())}
+                onChange={(e) => e.target.value && onFormat(e.target.value, note.trim(), model)}
               >
                 <option value="">Try another format…</option>
                 {groups.map((group) => (

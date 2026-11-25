@@ -237,3 +237,25 @@ def test_image_routing_and_quality_are_saved_field_by_field(client: TestClient, 
     assert disk.image_quality == "max" and disk.image_builds == 6 and disk.secondary.images.svg == "codex"
     client.put("/api/settings", json={"image_quality": "lean"})
     assert settings.image_builds == 3 and settings.image_refine_below == 8.0
+
+
+async def test_a_chosen_image_model_leads_the_job_but_never_the_judge(settings: Settings) -> None:
+    from inferno_ghostwriter.llm.router import image_model
+
+    claude = FakeLLM()
+    codex = SecondaryCLI("codex", discover=False)
+    gemini = SecondaryCLI("gemini", discover=False)
+    codex.signed_in = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    gemini.signed_in = AsyncMock(return_value=True)  # type: ignore[method-assign]
+    router = RoutingLLM(settings, api=claude, subscription=claude, secondary={"codex": codex, "gemini": gemini})
+    assert await router.image_route("hero image ideas") == ["codex", "gemini"]
+    with image_model("gemini"):
+        assert await router.image_route("hero image ideas") == ["gemini"]
+        assert await router.image_route("diagram design") == ["gemini"]
+        assert await router.image_route("image sheet judge", [b"png"]) == ["codex"]
+        assert not await router.can_paint()
+    with image_model("claude"):
+        assert await router.image_route("hero image ideas") == []
+    with image_model("codex"):
+        assert await router.image_route("hero image design") == ["codex"] and await router.can_paint()
+    assert await router.image_route("hero image design") == [] and await router.online() == ["codex", "gemini"]

@@ -2,9 +2,10 @@ import { Wand2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { errorText } from '../../api/client'
-import type { useImageMutations } from '../../api/hooks'
+import type { ImageRoute, useImageMutations } from '../../api/hooks'
 import type { ImageOut } from '../../api/types.gen'
 import { Button, Dialog, Field, Input, Notice, Select, Textarea } from '../../components/ui'
+import { ImageModelPicker } from './ImageModelPicker'
 
 type Mutations = ReturnType<typeof useImageMutations>
 
@@ -22,8 +23,24 @@ const PROVIDER_LABEL: Record<string, string> = {
 }
 
 /** Tell Claude what to change ("make the arrows orange"); the rest of the image stays. */
-export function EditDialog({ image, mutations, onClose, onJob }: { image: ImageOut; mutations: Mutations; onClose: () => void; onJob: (id: string) => void }) {
+export function EditDialog({
+  image,
+  mutations,
+  onClose,
+  onJob,
+  models = [],
+}: {
+  image: ImageOut
+  mutations: Mutations
+  onClose: () => void
+  onJob: (id: string) => void
+  /** The models the author may choose from (empty: no optional model is signed in, so no choice is shown). */
+  models?: ImageRoute[]
+}) {
   const [instruction, setInstruction] = useState('')
+  const [model, setModel] = useState<ImageRoute>('auto')
+  // Only GPT can change a painting, so a painting's edit offers no choice.
+  const painted = image.provider === 'gpt-image'
   return (
     <Dialog open onClose={onClose} title="Edit this image">
       <form
@@ -31,7 +48,7 @@ export function EditDialog({ image, mutations, onClose, onJob }: { image: ImageO
         onSubmit={(e) => {
           e.preventDefault()
           mutations.edit.mutate(
-            { id: image.id, instruction: instruction.trim() },
+            { id: image.id, instruction: instruction.trim(), model },
             {
               onSuccess: (j) => {
                 onJob(j.id)
@@ -55,6 +72,7 @@ export function EditDialog({ image, mutations, onClose, onJob }: { image: ImageO
             onChange={(e) => setInstruction(e.target.value)}
           />
         </Field>
+        {!painted && <ImageModelPicker id={`edit-model-${image.id}`} value={model} onChange={setModel} models={models} />}
         {mutations.edit.error && <Notice tone="error">{errorText(mutations.edit.error)}</Notice>}
         <Button type="submit" icon={<Wand2 className="size-4" />} loading={mutations.edit.isPending} disabled={instruction.trim().length < 3}>
           Edit image

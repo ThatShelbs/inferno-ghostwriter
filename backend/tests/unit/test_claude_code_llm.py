@@ -144,3 +144,9 @@ async def test_a_missing_claude_binary_is_an_llm_error_not_a_crash(tmp_path: Pat
 
     with pytest.raises(LLMError, match="Could not start Claude Code"):
         await gone.text(task="draft", system=SYSTEM, prompt="Write it.", effort="low")
+
+
+async def test_a_missed_prompt_is_retried_once(llm: ClaudeCodeLLM, record: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "missed_once")
+    out = await llm.text(task="opening data art", system=SYSTEM, prompt="Draw it.", effort="medium")
+    assert out == "Hello from your plan." and recorded(record)["stdin"] == "Draw it."

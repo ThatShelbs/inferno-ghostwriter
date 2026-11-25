@@ -62,12 +62,23 @@ describe('RemixDialog', () => {
     expect(screen.queryByLabelText('Staging')).not.toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('Who is in it'), 'dogs')
     await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
-    expect(onRemix).toHaveBeenCalledWith({ cast: 'dogs' }, true, '')
+    expect(onRemix).toHaveBeenCalledWith({ cast: 'dogs' }, true, '', 'auto')
 
     await userEvent.selectOptions(screen.getByLabelText('Colors'), 'viridis')
     await userEvent.click(screen.getByRole('switch'))
     await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
-    expect(onRemix).toHaveBeenLastCalledWith({ cast: 'dogs', palette: 'viridis' }, false, '')
+    expect(onRemix).toHaveBeenLastCalledWith({ cast: 'dogs', palette: 'viridis' }, false, '', 'auto')
+    // No optional model is signed in, so there is no model choice.
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
+  })
+
+  it('lets the author hand the remix to a signed-in optional model', async () => {
+    const onRemix = vi.fn()
+    render(<RemixDialog open onClose={() => {}} image={image('img2', 1)} dimensions={DIMENSIONS} onRemix={onRemix} models={['auto', 'claude', 'codex']} />)
+    expect(screen.queryByRole('option', { name: 'Gemini' })).not.toBeInTheDocument()
+    await userEvent.selectOptions(screen.getByLabelText('Model'), 'codex')
+    await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
+    expect(onRemix).toHaveBeenCalledWith({}, true, '', 'codex')
   })
 })
 

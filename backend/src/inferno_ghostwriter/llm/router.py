@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Literal
 
 from inferno_ghostwriter.config import ImageRoute, SecondaryProvider, Settings, WritingProvider
@@ -51,6 +53,22 @@ AUTO_IMAGE: dict[ImageCategory, list[SecondaryProvider]] = {
     "judge": ["codex"],
     "svg": [],
 }
+
+
+# The model the author chose for one redraw or edit (Ideas, Remix, Edit); None or "auto" = the Settings routing.
+_image_model: ContextVar[ImageRoute | None] = ContextVar("image_model", default=None)
+
+
+@contextmanager
+def image_model(choice: ImageRoute | None) -> Iterator[None]:
+    """Route this job's image work (pitches, designs, drawings) to ``choice`` instead of the Settings routing. The
+    judge keeps its seat, so a chosen model never grades its own work alone; Claude or Gemini turn GPT painting off
+    (a redraw of a painting is then drawn instead)."""
+    token = _image_model.set(choice)
+    try:
+        yield
+    finally:
+        _image_model.reset(token)
 
 
 def image_category(task: str) -> ImageCategory | None:
@@ -104,6 +122,9 @@ class RoutingLLM:
         if category is None:
             return []
         choice: ImageRoute = getattr(self.settings.secondary.images, category)
+        chosen = _image_model.get()
+        if chosen not in (None, "auto") and category != "judge":
+            choice = chosen
         if choice == "claude":
             return []
         if choice != "auto":
@@ -267,7 +288,13 @@ class RoutingLLM:
 
     async def can_paint(self) -> bool:
         codex = self.secondary.get("codex")
+        if _image_model.get() in ("claude", "gemini"):
+            return False
         return bool(self.settings.secondary.images.raster and codex is not None and await codex.signed_in())
+
+    async def online(self) -> list[SecondaryProvider]:
+        """The optional models signed in now (the choices an image dialog may offer besides Claude)."""
+        return [provider for provider, cli in self.secondary.items() if await cli.signed_in()]
 
     async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: UsageSink | None = None) -> bytes:
         """A picture from GPT image generation (see ``SecondaryCLI.paint``); raises LLMError when it is unavailable."""

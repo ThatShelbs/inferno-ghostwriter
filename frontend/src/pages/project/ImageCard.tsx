@@ -3,7 +3,7 @@ import { Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, Sparkles, Typ
 import { useRef, useState } from 'react'
 
 import { errorText } from '../../api/client'
-import { keys, useImageFormats, useImageMutations, useRemixOptions, type RedrawPicks } from '../../api/hooks'
+import { keys, useImageFormats, useImageModels, useImageMutations, useRemixOptions, type RedrawPicks } from '../../api/hooks'
 import type { ImageOut } from '../../api/types.gen'
 import { useJob } from '../../api/useJob'
 import { Badge, Button, Notice, Spinner } from '../../components/ui'
@@ -27,6 +27,7 @@ type Open = 'ideas' | 'remix' | 'words' | 'edit' | 'caption' | 'versions' | 'bui
 export function ImageCard({ projectId, image, images = [] }: { projectId: number; image: ImageOut; images?: ImageOut[] }) {
   const qc = useQueryClient()
   const mutations = useImageMutations(projectId)
+  const models = useImageModels()
   const [jobId, setJobId] = useState<string | null>(null)
   const [open, setOpen] = useState<Open>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -272,12 +273,13 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           onClose={() => setOpen(null)}
           room={room}
           formats={formats.data ?? []}
-          onPick={(index) => redraw(false, { concept: index })}
-          onPitch={(note) => redraw(true, { note })}
-          onFormat={(id, note) => redraw(false, { format: id, note })}
+          onPick={(index, model) => redraw(false, { concept: index, model })}
+          onPitch={(note, model) => redraw(true, { note, model })}
+          onFormat={(id, note, model) => redraw(false, { format: id, note, model })}
           referenceUrl={image.reference_url}
           onReference={(file) => mutations.setReference.mutate({ id: image.id, file })}
           onClearReference={() => mutations.clearReference.mutate(image.id)}
+          models={models}
         />
       )}
       {open === 'words' && (
@@ -296,7 +298,8 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           onClose={() => setOpen(null)}
           image={image}
           dimensions={remixOptions.data ?? []}
-          onRemix={(tweaks, improve, note) => redraw(false, { tweaks, improve, note })}
+          onRemix={(tweaks, improve, note, model) => redraw(false, { tweaks, improve, note, model })}
+          models={models}
         />
       )}
       {open === 'build' && (
@@ -310,7 +313,7 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
         />
       )}
       {open === 'versions' && <VersionsDialog image={image} mutations={mutations} onClose={() => setOpen(null)} />}
-      {open === 'edit' && <EditDialog image={image} mutations={mutations} onClose={() => setOpen(null)} onJob={setJobId} />}
+      {open === 'edit' && <EditDialog image={image} mutations={mutations} onClose={() => setOpen(null)} onJob={setJobId} models={models} />}
       {open === 'caption' && <CaptionDialog image={image} mutations={mutations} onClose={() => setOpen(null)} />}
     </figure>
   )

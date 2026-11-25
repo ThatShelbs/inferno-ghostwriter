@@ -255,6 +255,8 @@ class ImageService:
                     remix=remix,
                     usage=usage,
                 )
+            if updates.get("file_name") and "finalists" not in updates and image.finalists:
+                updates["finalists"] = self._refreshed_finalists(image, updates)
             updates["status"] = "ready"
             updates["error"] = None
         except (ImageProviderError, LLMError) as exc:
@@ -905,6 +907,23 @@ class ImageService:
             "alt": drawn.alt,
             "caption": drawn.caption,
         }
+
+    @staticmethod
+    def _refreshed_finalists(image: ProjectImage, updates: dict[str, Any]) -> list[dict[str, Any]]:
+        """The finalist strip after a redraw, remix, edit or picked idea made one new picture: it takes the place of
+        the finalist it came from and the other finalists stay as alternatives. When the image on show was no
+        finalist (an earlier version or an upload) the strip is stale and goes; Versions keeps every picture."""
+        finalists = list(image.finalists or [])
+        at = next((i for i, f in enumerate(finalists) if f.get("file_name") and f.get("file_name") == image.file_name), None)
+        if at is None:
+            return []
+        entry: dict[str, Any] = {
+            k: updates[k] for k in ("file_name", "provider", "spec", "alt", "caption", "width", "height") if k in updates
+        }
+        if updates.get("ideas") is not None:
+            entry["ideas"] = updates["ideas"]
+        finalists[at] = {**entry, "label": "Your latest version", "score": None, "reads_as": ""}
+        return finalists
 
     def _finalist(self, image: ProjectImage, drawn: Drawn, ideas: dict[str, Any] | None) -> dict[str, Any]:
         entry: dict[str, Any] = {

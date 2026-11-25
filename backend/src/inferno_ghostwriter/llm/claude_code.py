@@ -52,6 +52,8 @@ log = logging.getLogger(__name__)
 # which would silently bill the API instead of the plan.
 API_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 CALL_TIMEOUT_S = 30 * 60
+# What Claude Code prints when it read no prompt from stdin (seen when several start at once).
+MISSED_PROMPT = "Input must be provided"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 INSTALL_URL = "https://code.claude.com/docs/en/setup"
 
@@ -287,6 +289,7 @@ class ClaudeCodeLLM:
         on_delta: OnDelta | None = None,
         *,
         model: str | None = None,
+        retried: bool = False,
     ) -> dict[str, Any]:
         command = self.cli.command
         if command is None:
@@ -353,6 +356,10 @@ class ClaudeCodeLLM:
             if (limit or {}).get("status") == "rejected":
                 raise _usage_limit(limit)
             detail = stderr.strip().splitlines()[-1] if stderr.strip() else f"exit code {code}"
+            if MISSED_PROMPT in detail and not retried:
+                # Claude Code sometimes misses the prompt on stdin when several start at once; one retry is enough.
+                log.info("Claude Code missed the prompt during %s; trying once more", task)
+                return await self._call(task, system, prompt, effort, extra, on_delta, model=model, retried=True)
             raise LLMError(f"Claude Code stopped during {task} without a result ({detail}).")
         _check(result, limit, task)
         return result

@@ -24,6 +24,14 @@ if args[:2] == ["auth", "status"]:
     sys.exit(0)
 
 stdin = sys.stdin.read()
+if mode == "missed_once":
+    # Claude Code's own error when it read no prompt; the second call works.
+    marker = os.environ["FAKE_CLAUDE_RECORD"] + ".missed"
+    if not os.path.exists(marker):
+        open(marker, "w").close()
+        print("Error: Input must be provided either through stdin or as a prompt argument when using --print", file=sys.stderr)
+        sys.exit(1)
+    mode = "text"
 record = os.environ.get("FAKE_CLAUDE_RECORD")
 if record:
     with open(record, "w", encoding="utf-8") as f:

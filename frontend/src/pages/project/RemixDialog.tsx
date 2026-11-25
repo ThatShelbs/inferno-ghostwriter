@@ -1,9 +1,11 @@
 import { Sparkles } from 'lucide-react'
 import { useState } from 'react'
 
+import type { ImageRoute } from '../../api/hooks'
 import type { ImageOut, RemixDimensionOut } from '../../api/types.gen'
 import { Button, Dialog, Field, Select, Switch, Textarea } from '../../components/ui'
 import { remixSummary } from '../../lib/remix'
+import { ImageModelPicker } from './ImageModelPicker'
 
 const SURPRISE = 'auto'
 
@@ -17,17 +19,21 @@ export function RemixDialog({
   image,
   dimensions,
   onRemix,
+  models = [],
 }: {
   open: boolean
   onClose: () => void
   image: ImageOut
   /** The whole catalog; only the dimensions this image can vary are shown */
   dimensions: RemixDimensionOut[]
-  onRemix: (tweaks: Record<string, string>, improve: boolean, note: string) => void
+  onRemix: (tweaks: Record<string, string>, improve: boolean, note: string, model: ImageRoute) => void
+  /** The models the author may choose from (empty: no optional model is signed in, so no choice is shown). */
+  models?: ImageRoute[]
 }) {
   const [picks, setPicks] = useState<Record<string, string>>({})
   const [improve, setImprove] = useState(true)
   const [note, setNote] = useState('')
+  const [model, setModel] = useState<ImageRoute>('auto')
   const shown = dimensions.filter((d) => (image.remix_dimensions ?? []).includes(d.id))
   const last = remixSummary(image.remix)
   const pinned = Object.fromEntries(Object.entries(picks).filter(([, id]) => id && id !== SURPRISE))
@@ -38,7 +44,7 @@ export function RemixDialog({
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault()
-          onRemix(pinned, improve, note.trim())
+          onRemix(pinned, improve, note.trim(), model)
         }}
       >
         <p className="text-sm text-muted">
@@ -77,6 +83,7 @@ export function RemixDialog({
         >
           <Textarea id={`remix-note-${image.id}`} rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} />
         </Field>
+        <ImageModelPicker id={`remix-model-${image.id}`} value={model} onChange={setModel} models={models} />
         <div className="flex items-center gap-3">
           <Switch checked={improve} onChange={setImprove} label="Critique first" />
           <span className="text-sm">Let Claude critique the current image first and fix its weakest point</span>

@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from inferno_ghostwriter.config import Connection, SecondaryProvider, SecondarySettings
+from inferno_ghostwriter.config import Connection, ImageRoute, SecondaryProvider, SecondarySettings
 from inferno_ghostwriter.writer.dials import Dials, IncludeCode, Platform, ReferenceKind
 from inferno_ghostwriter.writer.formulas import ArticleType, FormulaOption, FormulaParts
 
@@ -744,6 +744,9 @@ class RedrawIn(BaseModel):
     tweaks: dict[str, str] | None = None
     # Critique the current image first and redraw to fix it (the default); False only tries the twist.
     improve: bool = True
+    # Who does this job's image work: "auto" follows Settings -> Image work; "claude", "codex" (ChatGPT) or "gemini"
+    # sends the pitches and designs to that model (an optional model only while it is signed in). The judge is unchanged.
+    model: ImageRoute = "auto"
 
 
 class BuildsOnIn(BaseModel):
@@ -767,6 +770,9 @@ class RemixDimensionOut(BaseModel):
 
 class ImageEditIn(BaseModel):
     instruction: str = Field(min_length=3, max_length=1000)
+    # Who does this job's image work: "auto" follows Settings -> Image work; "claude", "codex" (ChatGPT) or "gemini"
+    # sends the pitches and designs to that model (an optional model only while it is signed in). The judge is unchanged.
+    model: ImageRoute = "auto"
 
 
 class RevertIn(BaseModel):

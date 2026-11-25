@@ -126,6 +126,7 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     # Exactly one finalist is the picture on show, for every image that has finalists.
     assert all(sum(f["current"] for f in img["finalists"]) == 1 for img in project["images"] if img["finalists"])
     # Picking another finalist costs nothing and swaps the picture.
+    original_provider = hero["provider"]
     picked = client.post(f"/api/images/{hero['id']}/pick", json={"index": 1}).json()
     assert picked["finalists"][1]["current"] and picked["url"] != hero["url"]
     assert client.get(picked["finalists"][2]["url"]).status_code == 200
@@ -133,17 +134,28 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     hero = picked
 
     def opening_builds() -> list[dict]:
-        return [c for c in fake_llm.calls if c["task"].startswith("opening ") and c["task"].endswith(("drawing", "build", "scene"))]
+        ends = ("drawing", "build", "scene", "data art")
+        return [c for c in fake_llm.calls if c["task"].startswith("opening ") and c["task"].endswith(ends)]
 
     builds_before, ideas_before = len(opening_builds()), fake_llm.tasks().count("opening ideas")
     redraw = client.post(f"/api/images/{hero['id']}/redraw", json={}).json()
     assert redraw["status"] == "succeeded", redraw
     assert len(opening_builds()) == builds_before + 1 and fake_llm.tasks().count("opening ideas") == ideas_before
     assert "This is a redraw" in opening_builds()[-1]["prompt"]
+    # The redraw takes the place of the finalist on show (index 1); the other finalists stay as alternatives.
+    redrawn = client.get(f"/api/projects/{project_id}").json()
+    redrawn_hero = next(img for img in redrawn["images"] if img["id"] == hero["id"])
+    strip = redrawn_hero["finalists"]
+    assert len(strip) == 3 and strip[1]["current"] and strip[1]["label"] == "Your latest version"
+    assert strip[0]["label"] == hero["finalists"][0]["label"] and not strip[0]["current"]
+    # An optional model can be chosen only while it is signed in.
+    refused = client.post(f"/api/images/{hero['id']}/redraw", json={"model": "codex"})
+    assert refused.status_code == 422 and "not signed in" in refused.json()["detail"]
     uploaded = client.post(f"/api/images/{hero['id']}/upload", files={"file": ("shot.png", png_bytes(), "image/png")}).json()
     assert uploaded["provider"] == "upload" and len(uploaded["history"]) == 4
     reverted = client.post(f"/api/images/{hero['id']}/revert", json={"index": 0}).json()
-    assert reverted["provider"] == hero["provider"]
+    # The first version is the picture the room chose (finalists may be other styles, so compare with that one).
+    assert reverted["provider"] == original_provider
     assert client.get(reverted["history"][1]["url"]).status_code == 200
 
     # Editing: title, caption, passage rewrite.
