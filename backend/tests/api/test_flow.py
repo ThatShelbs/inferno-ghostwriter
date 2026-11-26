@@ -436,6 +436,25 @@ def test_regenerate_with_settings_tweak_and_undo(client: TestClient, sample_docx
     assert {"post.html", "post.md", "thumbnail.png", "teaser-post.txt", "README.txt"} <= names
 
 
+def test_tweak_can_add_new_images_and_undo_removes_them(client: TestClient, sample_docx: bytes) -> None:
+    project = ready_post(client, sample_docx)
+    url = f"/api/projects/{project['id']}"
+    slots_before = {i["slot_id"] for i in project["images"]}
+
+    assert client.post(f"{url}/tweak", json={"feedback": "Please add more images"}).status_code == 202
+    out = client.get(url).json()
+    added = {i["slot_id"] for i in out["images"]} - slots_before
+    assert len(added) == 1
+    slot = next(iter(added))
+    assert f"{{{{image:{slot}}}}}" in out["markdown"]
+    assert next(i for i in out["images"] if i["slot_id"] == slot)["status"] == "ready"
+    assert slot in {s["slot_id"] for s in out["plan"]["image_slots"]}
+
+    restored = client.post(f"{url}/revisions/0/restore").json()
+    assert {i["slot_id"] for i in restored["images"]} == slots_before
+    assert f"{{{{image:{slot}}}}}" not in restored["markdown"]
+
+
 def test_tweak_needs_a_post(client: TestClient, sample_docx: bytes) -> None:
     persona = create_persona(client)
     upload(client, persona["id"], sample_docx)

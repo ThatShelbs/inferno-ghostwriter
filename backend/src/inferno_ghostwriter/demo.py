@@ -680,10 +680,21 @@ def _post_edits(prompt: str) -> dict[str, Any]:
     image_changes = []
     if "image" in feedback or "diagram" in feedback:
         image_changes = [{"slot_id": "img2", "brief": "A flow diagram of how a pie chart hides the difference between slices"}]
+    new_images = []
+    if "more images" in feedback or "add an image" in feedback:
+        new_images = [
+            {
+                "kind": "diagram",
+                "purpose": "Shows the idea at a glance",
+                "brief": "A simple diagram of the idea in this paragraph",
+                "anchor_text": paragraph,
+            }
+        ]
     return {
         "summary": "Added a wry aside to the opening." + (" Redrew the diagram with a new idea." if image_changes else ""),
-        "edits": [{"find": paragraph, "replace": paragraph + DEMO_TWEAK}] if paragraph else [],
+        "edits": [{"find": paragraph, "replace": paragraph + DEMO_TWEAK}] if paragraph and not new_images else [],
         "image_changes": image_changes,
+        "new_images": new_images,
     }
 
 

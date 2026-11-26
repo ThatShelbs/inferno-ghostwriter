@@ -461,9 +461,9 @@ def restore_revision(project_id: int, index: int, session: SessionDep, services:
     _check_idle(services, project_id)
     entry = revisions.pop(index)
     project.revisions = revisions
-    if entry.get("added_slot"):
+    for added in [entry["added_slot"]] if entry.get("added_slot") else entry.get("added_slots") or []:
         # The text from before an image was added: the image goes too, or its placeholder would come straight back.
-        _drop_added_image(session, services, project, str(entry["added_slot"]))
+        _drop_added_image(session, services, project, str(added))
     push_revision(project, f"Before restoring: {entry.get('label', '')}", "restore")
     project.markdown = finish_text(str(entry.get("markdown", "")), project.plan)
     title, subtitle = split_title(project.markdown)
