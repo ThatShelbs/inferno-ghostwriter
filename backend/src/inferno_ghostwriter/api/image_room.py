@@ -79,7 +79,8 @@ def finalists_out(image: ProjectImage) -> list[FinalistOut]:
     return [
         FinalistOut(
             index=i,
-            url=f"/api/images/{image.id}/finalists/{i}/file",
+            # The file name is in the URL because a redraw replaces a finalist in place and the file is cached for good.
+            url=f"/api/images/{image.id}/finalists/{i}/file?v={f.get('file_name') or ''}",
             label=str(f.get("label") or ""),
             score=f.get("score"),
             reads_as=str(f.get("reads_as") or ""),
