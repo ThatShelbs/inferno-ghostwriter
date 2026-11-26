@@ -188,6 +188,15 @@ body {
   font-size: 0.9rem;
   line-height: 1.55;
 }
+/* Prompts and plain-text blocks read as prose: wrap them instead of scrolling. */
+.article pre:has(code:not([class*='language-'])),
+.article pre:has(code.language-text),
+.article pre:has(code.language-txt),
+.article pre:has(code.language-markdown),
+.article pre:has(code.language-md) {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .article pre code {
   background: transparent;
   padding: 0;
