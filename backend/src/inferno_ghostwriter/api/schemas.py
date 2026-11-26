@@ -9,7 +9,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from inferno_ghostwriter.config import Connection, ImageRoute, SecondaryProvider, SecondarySettings
-from inferno_ghostwriter.writer.dials import Dials, IncludeCode, Platform, ReferenceKind
+from inferno_ghostwriter.experiments.models import DEFAULT_MODEL as DEFAULT_EXPERIMENT_MODEL
+from inferno_ghostwriter.experiments.models import MAX_SCENARIOS, Experiment
+from inferno_ghostwriter.writer.dials import Dials, HandsOnCharts, IncludeCode, Platform, ReferenceKind
 from inferno_ghostwriter.writer.formulas import ArticleType, FormulaOption, FormulaParts
 
 Education = Literal["beginner", "intermediate", "expert"]
@@ -73,6 +75,7 @@ class SettingsOut(BaseModel):
     reference_max_searches: int
     check_reference_links: bool
     image_quality: Literal["lean", "max"]
+    allow_code_execution: bool
     image_tool_label: str
     data_dir: str
     seed_samples_dir: str
@@ -93,6 +96,8 @@ class SettingsIn(BaseModel):
     reference_max_searches: int | None = Field(None, ge=1, le=8)
     check_reference_links: bool | None = None
     image_quality: Literal["lean", "max"] | None = None
+    # Run the example code a post shows (hands-on data viz) on this computer; off until the author allows it.
+    allow_code_execution: bool | None = None
 
 
 # -- personas / samples / voice ----------------------------------------------------
@@ -122,6 +127,7 @@ class PersonaDefaults(BaseModel):
     default_technical_depth: int | None = Field(None, ge=0, le=10)
     default_skimmability: int | None = Field(None, ge=0, le=10)
     default_include_code: IncludeCode | None = None
+    default_hands_on_charts: HandsOnCharts | None = None
     default_platform: Platform | None = None
     # The formula new posts start from; {} = everything automatic.
     default_formula: FormulaParts | None = None
@@ -258,6 +264,7 @@ class PersonaOut(BaseModel):
     default_technical_depth: int
     default_skimmability: int
     default_include_code: str
+    default_hands_on_charts: str
     default_platform: str
     default_formula: FormulaParts
     default_opening_style: str
@@ -487,6 +494,24 @@ class DetectorStatusOut(BaseModel):
 # -- projects / images ------------------------------------------------------------------
 
 
+class ScenarioIn(BaseModel):
+    id: str = Field(min_length=1, max_length=40, pattern=r"^[a-z0-9_\-]+$")
+    label: str = Field(min_length=1, max_length=80)
+    library: str = Field(default="", max_length=40)
+    # The one line added to the prompt for this scenario; empty = the prompt is sent as it is.
+    addendum: str = Field(default="", max_length=300)
+
+
+class ExperimentIn(BaseModel):
+    """A library bake-off: ``prompt`` is sent once per scenario (None = the six defaults) to ``model``."""
+
+    prompt: str = Field(min_length=3)
+    model: str = DEFAULT_EXPERIMENT_MODEL
+    scenarios: list[ScenarioIn] | None = Field(default=None, max_length=MAX_SCENARIOS)
+    # The author agreed to run the returned code on this computer (it also needs "Run example code" in Settings).
+    run_code: bool = False
+
+
 class ProjectCreate(BaseModel):
     prompt: str = Field(min_length=3)
     persona_id: int | None = None
@@ -499,6 +524,8 @@ class ProjectCreate(BaseModel):
     idea_id: int | None = None
     # Ask 3-5 interview questions first; the post is written once the author answers (or skips) them.
     interview: bool = False
+    # A library bake-off: the same prompt answered once per scenario, each answer run for real (see experiments/).
+    experiment: ExperimentIn | None = None
 
 
 class BrandKit(BaseModel):
@@ -660,6 +687,16 @@ class FinalistOut(BaseModel):
     current: bool
 
 
+class HandsOnOut(BaseModel):
+    """A hands-on data viz image: the code it was made from, measured."""
+
+    library: str
+    lines: int
+    chars: int
+    # The code above the image was edited after the picture was made: Rerun brings them back together.
+    stale: bool = False
+
+
 class ImageOut(BaseModel):
     id: int
     slot_id: str
@@ -689,6 +726,8 @@ class ImageOut(BaseModel):
     remix: RemixOut | None = None
     # What Remix can vary for this image: "palette", "cast", "staging", "medium" (see GET /api/remix-options).
     remix_dimensions: list[str] = []
+    # Set for images made by running the code above them (kind "hands_on_viz").
+    hands_on: HandsOnOut | None = None
 
 
 class ImageFormatOut(BaseModel):
@@ -952,6 +991,8 @@ class ProjectOut(BaseModel):
     edit_rate: float | None
     evolutions: list[EvolutionOut]
     ab_test: ABTestSummary | None = None
+    # The library bake-off behind the post (prompt, scenarios, code, counts), or None.
+    experiment: Experiment | None = None
     # The Idea Lab idea the post was written from.
     idea_id: int | None = None
     created_at: datetime
@@ -1329,6 +1370,14 @@ class KitRepoOut(BaseModel):
     pushed_at: str
 
 
+class KitPromptOut(BaseModel):
+    """A prompt the kit ships, so the app can offer a copy button for it."""
+
+    file: str
+    title: str
+    text: str
+
+
 class KitOut(BaseModel):
     fit: KitFitOut
     built: bool
@@ -1344,6 +1393,8 @@ class KitOut(BaseModel):
     default_name: str
     linked: bool
     libraries: list[KitLibraryOut]
+    # Every prompt in the kit (an experiment's exact prompts, else the starter prompts), each copyable.
+    prompts: list[KitPromptOut] = []
 
 
 class KitBuildIn(BaseModel):

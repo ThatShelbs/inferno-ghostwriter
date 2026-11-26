@@ -104,7 +104,10 @@ class LLM(Protocol):
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
         on_reset: OnReset | None = None,
-    ) -> str: ...
+        model: str | None = None,
+    ) -> str:
+        """``model`` runs this one call on a named Claude model (an experiment pins Opus 5.5); None uses the configured one."""
+        ...
 
     async def research(
         self,

@@ -18,15 +18,20 @@ from inferno_ghostwriter.authenticity.passages import section_anchors
 from inferno_ghostwriter.authenticity.texture import texture_report
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage, Sample, VoiceProfile, utcnow
+from inferno_ghostwriter.experiments.compose import writer_notes
+from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.images import PLACEHOLDER_RE, ImageService
+from inferno_ghostwriter.images.codeblocks import code_blocks
 from inferno_ghostwriter.ingest import parse_markdown
 from inferno_ghostwriter.ingest.stylometrics import compute, fidelity
 from inferno_ghostwriter.jobs import JobContext
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.prompts import raw, render
+from inferno_ghostwriter.sandbox import Sandbox
 from inferno_ghostwriter.voice import current_voice_profile, format_exemplars, select_exemplars
 from inferno_ghostwriter.voice.lessons import format_lessons
 from inferno_ghostwriter.voice.playbook import format_playbook
+from inferno_ghostwriter.writer import handson_slots, verbatim
 from inferno_ghostwriter.writer.dials import Dials, ResolvedDials, resolve
 from inferno_ghostwriter.writer.examples import add_example_slots, format_missing_examples
 from inferno_ghostwriter.writer.humanize import humanize_post
@@ -113,6 +118,8 @@ def ensure_placeholders(markdown: str, slots: list[ImageSlot]) -> str:
             insert_at = _after_title_block(lines)
         elif slot.kind == "meme":
             insert_at = len(lines)
+        elif slot.kind == "hands_on_viz":
+            insert_at = _after_plot_code(lines, slot.section_index)
         else:
             insert_at = _end_of_section(lines, slot.section_index)
         lines[insert_at:insert_at] = ["", tag, ""]
@@ -188,6 +195,16 @@ def _after_title_block(lines: list[str]) -> int:
     return index
 
 
+def _after_plot_code(lines: list[str], section_index: int) -> int:
+    """Just after the last plotting example in a section (the picture is that code's output); the section's end if none."""
+    end = _end_of_section(lines, section_index)
+    headings = [i for i, line in enumerate(lines) if line.startswith("## ")]
+    start = headings[min(max(section_index, 0), len(headings) - 1)] if headings else 0
+    inside = "\n".join(lines[start:end])
+    plots = [b for b in code_blocks(inside) if handson_slots.draws_chart(b)]
+    return start + plots[-1].end + 1 if plots else end
+
+
 def _end_of_section(lines: list[str], section_index: int) -> int:
     headings = [i for i, line in enumerate(lines) if line.startswith("## ")]
     if not headings:
@@ -249,8 +266,11 @@ async def generate_article(
     ctx: JobContext | Reporter,
     links: LinkChecker | None = None,
     variation: Variation | None = None,
+    sandbox: Sandbox | None = None,
 ) -> dict[str, Any]:
-    """Write the project's post and draw its images. ``variation`` is set only for an A/B test's challenger."""
+    """Write the project's post and draw its images. ``variation`` is set only for an A/B test's challenger.
+
+    ``sandbox`` runs example code (hands-on images, library experiments); None means code is never run."""
     # expire_on_commit=False: these rows are read for the rest of the (long) job after the session closes.
     with Session(engine, expire_on_commit=False) as session:
         project = session.get(Project, project_id)
@@ -271,7 +291,7 @@ async def generate_article(
 
     try:
         return await _generate(
-            engine, llm, settings, images, project, persona, voice_profile, samples, ctx, links or NoLinkChecker(), variation
+            engine, llm, settings, images, project, persona, voice_profile, samples, ctx, links or NoLinkChecker(), variation, sandbox
         )
     except Exception as exc:
         with Session(engine) as session:
@@ -361,6 +381,8 @@ async def write_post(
     enrich: Callable[[str, ArticlePlan, list[SystemBlock]], Awaitable[str]] | None = None,
     variation: Variation | None = None,
     interview: list[dict[str, Any]] | None = None,
+    extra_material: str = "",
+    keep_brief_blocks: bool = True,
 ) -> WrittenPost:
     """Plan -> streamed draft -> critique/revise -> optional ``enrich`` pass (references). Images are a separate step."""
     exemplars = select_exemplars(prompt, samples)
@@ -370,7 +392,8 @@ async def write_post(
     system = writer_system(voice_profile.markdown, format_exemplars(exemplars), lessons, playbook, variation.emphasis if variation else "")
     settings_text = prompt_settings(dials)
     profile = author_profile(samples, voice_profile.baseline_stylometrics)
-    material = format_author_material(interview)
+    # ``extra_material`` is facts the writer must build on (an experiment's results); it rides with the author's own material.
+    material = format_author_material(interview) + extra_material
 
     # 1. Plan
     await reporter.progress(0.03, "Planning the post")
@@ -424,6 +447,7 @@ async def write_post(
     )
     # A placeholder the writer added for an example becomes a real slot instead of being dropped.
     draft, slots = add_example_slots(draft, slots, fill_dangling=False)
+    draft, slots = handson_slots.settle_slots(draft, slots, dials.hands_on_charts)
     draft = ensure_placeholders(draft, slots)
     measured = measure(draft, voice_profile.baseline_stylometrics)
     if on_draft:
@@ -444,6 +468,7 @@ async def write_post(
                     ai_tells=scan(draft, profile).tells_text(),
                     texture=texture_report(draft, profile.texture).text(),
                     author_material_check=author_material_check(interview),
+                    verbatim_missing=verbatim.format_missing(draft, prompt) if keep_brief_blocks else "",
                     callbacks=format_callbacks(plan),
                     missing_examples=format_missing_examples(draft),
                     **settings_text,
@@ -467,6 +492,7 @@ async def write_post(
                 usage=reporter.add_usage,
             )
             draft, slots = add_example_slots(draft, slots, fill_dangling=False)
+            draft, slots = handson_slots.settle_slots(draft, slots, dials.hands_on_charts)
             draft = ensure_placeholders(draft, slots)
             measured = measure(draft, voice_profile.baseline_stylometrics)
     except LLMError as exc:
@@ -477,6 +503,7 @@ async def write_post(
 
     # Anything the post still introduces without showing becomes an image, drawn with the others.
     draft, slots = add_example_slots(draft, slots)
+    draft, slots = handson_slots.settle_slots(draft, slots, dials.hands_on_charts)
     draft = ensure_placeholders(draft, slots)
     if slots != plan.image_slots:
         plan = plan.model_copy(update={"image_slots": slots})
@@ -528,6 +555,15 @@ async def write_post(
                 await reporter.emit("draft_reset", {})
                 await reporter.emit("draft_delta", {"text": draft})
 
+    # Blocks the brief shows (a prompt, a script) go back in word for word if any went missing along the way.
+    if keep_brief_blocks:
+        restored = verbatim.restore(draft, prompt)
+        if restored != draft:
+            draft = restored
+            measured = measure(draft, voice_profile.baseline_stylometrics)
+            await reporter.emit("draft_reset", {})
+            await reporter.emit("draft_delta", {"text": draft})
+
     # 6. AI-generation detection report (the humanize check is reused when nothing changed since)
     await reporter.progress(0.69, "Checking how human the post reads")
     authenticity = (
@@ -560,6 +596,7 @@ async def _generate(
     ctx: JobContext | Reporter,
     links: LinkChecker,
     variation: Variation | None = None,
+    sandbox: Sandbox | None = None,
 ) -> dict[str, Any]:
     from inferno_ghostwriter.writer import references  # imports this module
 
@@ -571,6 +608,7 @@ async def _generate(
         project.prompt,
         default_revisions=settings.revision_passes,
         words_per_image=(voice_profile.baseline_stylometrics or {}).get("words_per_image"),
+        code_runs=settings.allow_code_execution,
     )
 
     async def add_references(draft: str, plan: ArticlePlan, system: list[SystemBlock]) -> str:
@@ -589,6 +627,26 @@ async def _generate(
         )
         references.replace_references(engine, project_id, woven)
         return markdown
+
+    # A library bake-off runs first (every scenario is asked and its code run), so the writer can build on real results.
+    experiment = load_experiment(project.experiment)
+    pngs: dict[str, bytes] = {}
+    experiment_notes = ""
+    if experiment is not None:
+        from inferno_ghostwriter.experiments import service as experiments  # it imports this package
+
+        await ctx.progress(0.02, "Running the experiment")
+        # A regeneration keeps the answers already on file (no new model calls); only the code runs again.
+        experiment, pngs = await experiments.execute(
+            llm=llm,
+            settings=settings,
+            sandbox=sandbox,
+            experiment=experiment,
+            reporter=ctx,
+            reuse=any(s.code for s in experiment.scenarios),
+        )
+        experiments.save(engine, project_id, experiment)
+        experiment_notes = "\n" + writer_notes(experiment) + "\n"
 
     # Old references belong to the old text.
     references.replace_references(engine, project_id, [])
@@ -616,8 +674,15 @@ async def _generate(
         enrich=add_references,
         variation=variation,
         interview=project.interview or None,
+        extra_material=experiment_notes,
+        keep_brief_blocks=experiment is None,
     )
     draft, plan, slots = post.markdown, post.plan, post.plan.image_slots
+    if experiment is not None:
+        # Code, not the writer, puts each prompt, its exact code and its chart in the post, and adds the charts' slots.
+        draft, expanded = experiments.expand_into(plan.model_dump(), draft, experiment)
+        plan = ArticlePlan.model_validate(expanded)
+        slots = plan.image_slots
 
     title, subtitle = split_title(draft)
     _save(
@@ -648,6 +713,8 @@ async def _generate(
 
     # An image that builds on an earlier one waits for it, then draws from its finished source.
     drawn = {s.slot_id: asyncio.Event() for s in slots}
+    # An experiment's charts were already drawn by the code that ran; the side-by-side image waits for all of them.
+    charts = {s.slot_id: s for s in experiment.scenarios if s.slot_id} if experiment is not None else {}
 
     async def make(image_id: int, kind: str, slot_id: str, builds_on: str) -> None:
         nonlocal finished
@@ -655,17 +722,22 @@ async def _generate(
             await opened.wait()
         if builds_on in drawn:
             await drawn[builds_on].wait()
+        if experiment is not None and slot_id == experiment.montage_slot:
+            await asyncio.gather(*(drawn[sid].wait() for sid in charts if sid in drawn))
         try:
-            async with semaphore:
-                await images.create(
-                    image_id,
-                    persona=persona,
-                    title=title or plan.chosen_title,
-                    markdown=draft,
-                    voice_profile=voice_profile.markdown,
-                    brand_kit=project.brand_kit,
-                    usage=ctx.add_usage,
-                )
+            if slot_id in charts and experiment is not None and charts[slot_id].id in pngs:
+                images.save_experiment_image(image_id, pngs[charts[slot_id].id], charts[slot_id], persona, experiment.model)
+            else:
+                async with semaphore:
+                    await images.create(
+                        image_id,
+                        persona=persona,
+                        title=title or plan.chosen_title,
+                        markdown=draft,
+                        voice_profile=voice_profile.markdown,
+                        brand_kit=project.brand_kit,
+                        usage=ctx.add_usage,
+                    )
         finally:
             drawn[slot_id].set()
             if kind == "hero":
@@ -750,6 +822,8 @@ def prompt_settings(dials: ResolvedDials) -> dict[str, Any]:
         "yes": "include key code snippets and/or LLM prompts",
         "no": "do not include code",
     }[dials.include_code]
+    if dials.hands_on_charts == "lots":
+        include_code = "include complete, runnable examples (each one draws a chart) and the LLM prompts the post is about"
     return {
         "topic": dials.topic,
         "audience": dials.audience or "the author's usual readers",
@@ -764,6 +838,7 @@ def prompt_settings(dials: ResolvedDials) -> dict[str, Any]:
         "platform": dials.platform,
         "platform_guide": dials.platform_guide,
         "image_count": dials.image_count,
+        "hands_on_guide": handson_slots.guide(dials.hands_on_charts),
     }
 
 

@@ -16,7 +16,7 @@ import { panelDomId, tabDomId } from '../lib/tabs'
 import { buildFormula, formulaFrom } from '../lib/formula'
 import { autoReferenceCount } from '../lib/references'
 import { InsightsTab } from './persona/InsightsTab'
-import { PLATFORMS, STYLE_DIALS, autoImageCount, styleLabel, type Education, type IncludeCode, type Platform } from './dials'
+import { PLATFORMS, STYLE_DIALS, autoImageCount, styleLabel, type Education, type HandsOnCharts, type IncludeCode, type Platform } from './dials'
 
 type Tab = 'samples' | 'voice' | 'insights' | 'evolution' | 'settings'
 const TABS: Tab[] = ['samples', 'voice', 'insights', 'evolution', 'settings']
@@ -121,6 +121,7 @@ function defaultsFrom(persona: PersonaOut) {
     default_technical_depth: persona.default_technical_depth,
     default_skimmability: persona.default_skimmability,
     default_include_code: persona.default_include_code as IncludeCode,
+    default_hands_on_charts: persona.default_hands_on_charts as HandsOnCharts,
     default_platform: persona.default_platform as Platform,
     default_formula: buildFormula(formulaFrom(persona.default_formula)),
     default_opening_style: persona.default_opening_style,
@@ -298,6 +299,14 @@ function SettingsTab({ persona }: { persona: PersonaOut }) {
               <option value="auto">Where they help</option>
               <option value="yes">Include them</option>
               <option value="no">No code</option>
+            </Select>
+          </Field>
+          <Field label="Hands-on charts" htmlFor="p-handson">
+            <Select id="p-handson" value={draft.default_hands_on_charts} onChange={(e) => set({ default_hands_on_charts: e.target.value as HandsOnCharts })}>
+              <option value="auto">Automatic</option>
+              <option value="lots">Lots</option>
+              <option value="few">A few</option>
+              <option value="none">None</option>
             </Select>
           </Field>
           <Field label="Platform" htmlFor="p-platform">

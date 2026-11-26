@@ -1,4 +1,4 @@
-import { Check, Download, ExternalLink, FlaskConical, GitBranch, Link2, Upload } from 'lucide-react'
+import { Check, Copy, Download, ExternalLink, FlaskConical, GitBranch, Link2, Upload } from 'lucide-react'
 import { useState } from 'react'
 
 import { errorText } from '../../api/client'
@@ -9,6 +9,27 @@ import { Badge, Button, Field, Input, Notice, ProgressBar, Select, Spinner, Text
 import { cx } from '../../lib/cx'
 
 type Library = KitBuildIn['library']
+
+/** Copies text to the clipboard and says so for a moment. */
+function CopyButton({ text, label }: { text: string; label: string }) {
+  const [done, setDone] = useState(false)
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      icon={done ? <Check className="size-4" /> : <Copy className="size-4" />}
+      aria-label={label}
+      onClick={() => {
+        void navigator.clipboard.writeText(text).then(() => {
+          setDone(true)
+          window.setTimeout(() => setDone(false), 1500)
+        })
+      }}
+    >
+      {done ? 'Copied' : 'Copy'}
+    </Button>
+  )
+}
 
 function FitSummary({ kit }: { kit: KitOut }) {
   return (
@@ -218,6 +239,23 @@ export function KitPanel({ projectId }: { projectId: number }) {
             ))}
           </ul>
         </details>
+      )}
+      {data.built && (data.prompts ?? []).length > 0 && (
+        <div className="space-y-2" aria-label="Prompts in the kit">
+          <p className="font-semibold">Prompts to copy</p>
+          <ul className="space-y-2">
+            {(data.prompts ?? []).map((p) => (
+              <li key={p.file} className="rounded-xl border border-line p-3 text-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-semibold">{p.title}</span>
+                  <CopyButton text={p.text} label={`Copy prompt: ${p.title}`} />
+                </div>
+                <p className="mt-1 line-clamp-2 text-xs text-muted">{p.text}</p>
+                <p className="mt-1 font-mono text-xs text-muted">{p.file}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       {data.built && <GitHubSection projectId={projectId} kit={data} busy={busy} onJob={setJobId} />}
     </div>

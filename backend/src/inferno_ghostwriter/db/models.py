@@ -38,6 +38,8 @@ class Persona(SQLModel, table=True):
     default_technical_depth: int = 5
     default_skimmability: int = 5
     default_include_code: str = "auto"
+    # Hands-on charts (images made by running the example code above them): auto | lots | few | none.
+    default_hands_on_charts: str = "auto"
     default_platform: str = "medium"
     # The formula new posts start from (see writer.formulas): article_type, opener, body, closer and notes; {} = all automatic.
     default_formula: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, default={}))
@@ -151,6 +153,8 @@ class Project(SQLModel, table=True):
     interview: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON, default=[]))
     # The hands-on kit (see kit/): its design, settings and, once pushed, its GitHub repository. None = never built.
     kit: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
+    # A library bake-off (see experiments/): one prompt, one answer per scenario, each run for real. None = not an experiment.
+    experiment: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

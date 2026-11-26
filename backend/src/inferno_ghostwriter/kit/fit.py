@@ -59,6 +59,13 @@ def kit_fit(project: Project, images: list[ProjectImage]) -> KitFit:
     if charts:
         score += 2
         reasons.append(f"{_plural(len(charts), 'chart')} to recreate from data")
+    handson = [i for i in images if i.kind == "hands_on_viz" and i.status == "ready"]
+    if handson:
+        score += 2
+        reasons.append(f"{_plural(len(handson), 'chart')} drawn by the post's own code")
+    if getattr(project, "experiment", None):
+        score += RECOMMEND_AT
+        reasons.append("a library experiment: every prompt and its code, ready to run")
     kind = article_type_of(project)
     if kind in HANDS_ON_TYPES:
         score += 2

@@ -187,9 +187,12 @@ class FakeLLM:
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
         on_reset: OnReset | None = None,
+        model: str | None = None,
     ) -> str:
-        self.calls.append({"kind": "text", "task": task, "prompt": prompt, "system": system})
-        if task == "voice profile synthesis":
+        self.calls.append({"kind": "text", "task": task, "prompt": prompt, "system": system, "model": model})
+        if task.startswith("experiment "):
+            text = experiment_reply(prompt)
+        elif task == "voice profile synthesis":
             text = VOICE_PROFILE
         elif task.startswith("passage "):
             passages = showcase.PASSAGES if self.showcase else PASSAGES
@@ -399,6 +402,33 @@ def _showcase_payload(name: str, prompt: str) -> dict[str, Any] | None:
     return None
 
 
+_EXPERIMENT_CODE = {
+    "matplotlib": 'import matplotlib.pyplot as plt\nfrom vega_datasets import data\n\ndf = data.movies().dropna(subset=["Major_Genre", "MPAA_Rating"])\n'
+    'table = df.groupby(["Major_Genre", "MPAA_Rating"]).size().unstack(fill_value=0)\ntable.plot.barh(stacked=True, colormap="viridis")\nplt.show()',
+    "plotly": 'import plotly.express as px\nfrom vega_datasets import data\n\ndf = data.movies().dropna(subset=["Major_Genre", "MPAA_Rating"])\n'
+    'fig = px.histogram(df, y="Major_Genre", color="MPAA_Rating", color_discrete_sequence=px.colors.sequential.Viridis)\nfig.show()',
+    "seaborn": 'import seaborn as sns\nfrom vega_datasets import data\n\ndf = data.movies().dropna(subset=["Major_Genre", "MPAA_Rating"])\n'
+    'sns.histplot(df, y="Major_Genre", hue="MPAA_Rating", multiple="stack", palette="viridis")',
+    "altair": 'import altair as alt\nfrom vega_datasets import data\n\ndf = data.movies().dropna(subset=["Major_Genre", "MPAA_Rating"])\n'
+    'alt.Chart(df).mark_bar().encode(y="Major_Genre:N", x="count()", color="MPAA_Rating:N").show()',
+    "bokeh": 'from bokeh.plotting import figure, show\nfrom vega_datasets import data\n\ndf = data.movies().dropna(subset=["Major_Genre"])\n'
+    'counts = df["Major_Genre"].value_counts()\np = figure(y_range=list(counts.index))\np.hbar(y=list(counts.index), right=list(counts.values), height=0.8)\nshow(p)',
+}
+
+
+def experiment_code(library: str) -> str:
+    """Canned example code for a library (any unknown one gets the matplotlib version)."""
+    return _EXPERIMENT_CODE.get(library, _EXPERIMENT_CODE["matplotlib"])
+
+
+def experiment_reply(prompt: str) -> str:
+    """What the fake model answers to an experiment prompt: the library the prompt names, as a chat answer with one code block."""
+    named = re.search(r"Use the Python library ([A-Za-z]+)", prompt)
+    library = named.group(1).lower() if named else "matplotlib"
+    code = experiment_code(library)
+    return f"Here is a stacked bar chart of films per genre by rating.\n\n```python\n{code}\n```\n\nThe code is about {len(code.splitlines())} lines."
+
+
 def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) -> dict[str, Any]:
     if is_showcase and (payload := _showcase_payload(name, prompt)) is not None:
         return payload
@@ -465,6 +495,8 @@ def _structured_payload(name: str, prompt: str = "", is_showcase: bool = False) 
         return _twin_verdicts(prompt)
     if name == "InterviewQuestions":
         return {"questions": DEMO_INTERVIEW}
+    if name == "HandsOnFix":
+        return {"code": experiment_code("matplotlib"), "what_changed": "Loaded the data from the packaged copy."}
     if name == "ImageTextEdits":
         return _image_text_edits(prompt)
     if name == "ImagePlacement":

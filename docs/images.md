@@ -116,6 +116,35 @@ For each draw Claude reads the text around the image, the author's *Images & Cap
 
 The ghost is the house cast. A redraw may try other casts (see *Redraw that improves*); real people's likenesses and other creators' characters are never drawn.
 
+## Hands-on data viz
+
+A **hands-on data viz** image is the chart a Python example in the post draws. It is made by running the code block **right above** the image, so the picture can never disagree with the code beside it. It is meant for how-to, tutorial and hands-on posts (including data-viz tutorials), where it is the main body image, and is used sparingly elsewhere, only where it fits.
+
+**How it is made** (`images/handson.py`, `images/codeblocks.py`, provider `hands-on-code`):
+
+1. The writer puts a complete, runnable example in the section (a real public dataset such as one from `vega_datasets`, one chart, a final `show()`), and the image's `{{image:ID}}` on its own line directly after the code block.
+2. The app finds that block (`code_before`; any text between the block and the placeholder means there is no block), checks the code (`codecheck.py`: allowed libraries only, no shelling out, no `eval`) and runs it in an empty scratch folder with `uv run --no-project --with <libraries>` (`sandbox.py`). A small shim turns `plt.show()`, `fig.show()`, `chart.show()` and Bokeh's `show()` into files, so the code stays exactly as written. Bokeh and Plotly pages are saved as pictures with an installed Edge or Chrome.
+3. The chart is stored with the code's hash, library, line count and character count; the card shows "N lines, M characters".
+
+**When the code fails**, Claude gets the code and the error once (`prompts/handson_fix.md`) and returns a corrected script. The post's code block is **replaced with it** (a text revision you can undo), so the article never shows code that does not make the picture. If the second run fails too, only that image shows the error; the post keeps its code and never claims a chart.
+
+**Tools on the card:** *Redraw* runs the code again as it is now. *Edit* asks Claude to change the code ("make the bars horizontal"), rewrites the block and re-runs it. *Replace*, *Versions* and *Caption* work as everywhere. There are no Ideas, Remix or Words, because the picture is the code's output. If you edit the code in the post, the card shows **Code changed since this image** and *Rerun* brings them together again. Reverting an image restores the picture, not the code.
+
+**Turning it on.** Running code is off until you allow it: **Settings → Run example code** (`Settings.allow_code_execution`). The code is checked first and runs without your keys or tokens, but it is real code on your computer, and it is a guarded local process rather than a hard sandbox. The first run of each library builds a throwaway environment with uv (about 10 to 20 seconds); later runs reuse it. On Windows the app uses a short uv cache folder (`C:\gw-uv`) because plotly's file names overflow the 260-character path limit.
+
+**How much it is used** is the dial **Hands-on charts** (New post → Customize, or a persona's defaults):
+
+| Dial | What the post gets |
+| --- | --- |
+| `auto` | **Lots** for how-to, tutorial and hands-on posts; **a few** (at most two) for case study, tool review, comparison and explainer posts about data work; none otherwise |
+| `lots` | Most middle images are hands-on data viz, one for each chart-drawing example; a plotting example the writer left without a picture gets one |
+| `few` | At most two, only where a code example draws a chart the reader should compare with the text |
+| `none` | The kind is not used |
+
+It is always `none` while running code is off or the post has no code (`include_code` = no). `writer/handson_slots.py` keeps the post and the slots in agreement: a hands-on slot with no code above it becomes an ordinary chart, and in `lots` mode extra slots are added (at most 8, never past 15 images).
+
+**What is verified.** `backend/scripts/experiment_smoke.py` draws a stacked bar chart with matplotlib, seaborn, plotly, altair and bokeh through the real sandbox (free, no model call). The unit tests cover finding and replacing the block, the repair round, the stale check, the slot backstop, the environment scrubbing and the code check; tests and demo mode replace the sandbox with `NoSandbox`.
+
 ## Memes
 
 The meme is the last thing a reader sees and the thing they share. `images/memes/` holds the catalog (`formats.py`, 29 formats), the room (`generate.py`), the stagings, the cast and the composer.

@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     # finalist refined, as before the lean room (more pictures to choose from, several times the model calls).
     image_quality: Literal["lean", "max"] = "lean"
 
+    # Run the Python example code a post shows (hands-on data viz images, library experiments) on this computer to draw the
+    # chart it makes. The code is checked first and runs in a scratch folder with no keys, but it is real code: off until
+    # the author turns it on in Settings.
+    allow_code_execution: bool = False
+
     def apply_image_quality(self) -> None:
         """Set the room's fan-out from ``image_quality`` (called when the setting is loaded or changed)."""
         lean = self.image_quality == "lean"

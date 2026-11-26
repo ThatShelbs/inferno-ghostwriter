@@ -1,5 +1,16 @@
 import type { PersonaOut } from '../api/types.gen'
-import { STYLE_DIALS, TOPICS, autoImageCount, personaStyle, shownDials, styleLabel, type DialsState, type Education, type IncludeCode } from '../pages/dials'
+import {
+  STYLE_DIALS,
+  TOPICS,
+  autoImageCount,
+  personaStyle,
+  shownDials,
+  styleLabel,
+  type DialsState,
+  type Education,
+  type HandsOnCharts,
+  type IncludeCode,
+} from '../pages/dials'
 import { REFERENCE_KINDS, autoReferenceCount, type ReferenceKind } from '../lib/references'
 import { Field, Input, Select, Slider } from './ui'
 
@@ -15,7 +26,7 @@ export function DialsFields({
   persona: PersonaOut | undefined
   idPrefix?: string
 }) {
-  const { targetWords, imageCount, referenceCount, humor, education, includeCode } = shownDials(dials, persona)
+  const { targetWords, imageCount, referenceCount, humor, education, includeCode, handsOnCharts } = shownDials(dials, persona)
   const kinds = dials.referenceKinds ?? REFERENCE_KINDS.map((k) => k.kind)
   const toggleKind = (kind: ReferenceKind, on: boolean) => {
     const next = REFERENCE_KINDS.map((k) => k.kind).filter((k) => (k === kind ? on : kinds.includes(k)))
@@ -129,6 +140,18 @@ export function DialsFields({
           <option value="auto">Where they help</option>
           <option value="yes">Yes, include them</option>
           <option value="no">No code</option>
+        </Select>
+      </Field>
+      <Field
+        label="Hands-on charts"
+        htmlFor={id('handson')}
+        hint="Charts made by running the example code above them, so the picture always matches the code. Needs “Run example code” in Settings."
+      >
+        <Select id={id('handson')} value={handsOnCharts} onChange={(e) => onChange({ handsOnCharts: e.target.value as HandsOnCharts })}>
+          <option value="auto">Automatic (lots in how-to and tutorials)</option>
+          <option value="lots">Lots: one for each chart-drawing example</option>
+          <option value="few">A few, where it fits</option>
+          <option value="none">None</option>
         </Select>
       </Field>
     </div>

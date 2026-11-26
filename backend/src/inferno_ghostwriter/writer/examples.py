@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Engine
@@ -18,6 +17,15 @@ from sqlmodel import Session, col, select
 
 from inferno_ghostwriter.db import Persona, Project, ProjectImage, utcnow
 from inferno_ghostwriter.images import PLACEHOLDER_RE, ImageService
+from inferno_ghostwriter.images.codeblocks import (  # noqa: F401 - re-exported for callers
+    FENCE as _FENCE,
+)
+from inferno_ghostwriter.images.codeblocks import (
+    Block as _Block,
+)
+from inferno_ghostwriter.images.codeblocks import (
+    parse_blocks as _blocks,
+)
 from inferno_ghostwriter.voice import current_voice_profile
 from inferno_ghostwriter.writer.revisions import push_revision
 from inferno_ghostwriter.writer.schemas import ImageKind, ImageSlot
@@ -28,63 +36,12 @@ if TYPE_CHECKING:
 # Never add more than this many images to one post on top of the planned ones.
 MAX_EXTRA_SLOTS = 8
 
-_FENCE = re.compile(r"^\s*(```|~~~)")
-_LIST = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _KIND_WORDS: list[tuple[re.Pattern[str], ImageKind]] = [
     (re.compile(r"chart|graph|plot", re.I), "chart"),
     (re.compile(r"diagram|flow|pipeline|architecture|loop|map", re.I), "diagram"),
     (re.compile(r"icon", re.I), "icon"),
     (re.compile(r"illustration|scene", re.I), "illustration"),
 ]
-
-
-@dataclass
-class _Block:
-    start: int  # first line index
-    end: int  # last line index
-    kind: str  # prose | heading | subheading | code | list | table | quote | image
-    text: str
-
-
-def _blocks(lines: list[str]) -> list[_Block]:
-    blocks: list[_Block] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        if not line.strip():
-            i += 1
-            continue
-        if _FENCE.match(line):
-            j = i + 1
-            while j < len(lines) and not _FENCE.match(lines[j]):
-                j += 1
-            blocks.append(_Block(i, min(j, len(lines) - 1), "code", ""))
-            i = j + 1
-            continue
-        j = i
-        while j + 1 < len(lines) and lines[j + 1].strip() and not _FENCE.match(lines[j + 1]):
-            j += 1
-        text = "\n".join(lines[i : j + 1]).strip()
-        first = lines[i].strip()
-        if PLACEHOLDER_RE.fullmatch(first) or first.startswith("!["):
-            kind = "image"
-        elif first.startswith("## ") or first.startswith("# "):
-            kind = "heading"
-        elif first.startswith("#"):
-            kind = "subheading"
-        elif _LIST.match(first):
-            kind = "list"
-        elif first.startswith("|"):
-            kind = "table"
-        elif first.startswith(">"):
-            kind = "quote"
-        elif first.startswith("<"):
-            kind = "html"
-        else:
-            kind = "prose"
-        blocks.append(_Block(i, j, kind, text))
-        i = j + 1
-    return blocks
 
 
 # A lead-in that shows something ("Here is the file:", "It looks like this:"), not one that the next paragraph answers

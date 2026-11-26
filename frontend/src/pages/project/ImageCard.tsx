@@ -1,6 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, Sparkles, Type, Wand2 } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { Link } from 'react-router'
 
 import { errorText } from '../../api/client'
 import { keys, useImageFormats, useImageModels, useImageMutations, useRemixOptions, type RedrawPicks } from '../../api/hooks'
@@ -17,6 +18,17 @@ import { BuildOnDialog, CaptionDialog, EditDialog, VersionsDialog } from './Imag
 import { ImageRoomDialog } from './ImageRoomDialog'
 import { RemixDialog } from './RemixDialog'
 import { WordsDialog } from './WordsDialog'
+
+/** How a hands-on image names the library its code is about (the server sends the import name). */
+const HANDS_ON_LIBRARY: Record<string, string> = {
+  matplotlib: 'Matplotlib',
+  seaborn: 'Seaborn',
+  plotly: 'Plotly',
+  altair: 'Altair',
+  bokeh: 'Bokeh',
+  plotnine: 'plotnine',
+  pandas: 'pandas',
+}
 
 type Open = 'ideas' | 'remix' | 'words' | 'edit' | 'caption' | 'versions' | 'build' | null
 
@@ -45,7 +57,10 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
   const room = image.room ?? null
   const formats = useImageFormats(room?.room ?? 'body', image.kind, open === 'ideas' && !!room)
   const remixOptions = useRemixOptions(open === 'remix')
-  const canRemix = drawn && (image.remix_dimensions ?? []).length > 0
+  // A hands-on data viz picture is whatever the code above it draws: no pitches, remixes or words, just rerun and edit the code.
+  const handsOn = image.kind === 'hands_on_viz'
+  const canRemix = drawn && !handsOn && (image.remix_dimensions ?? []).length > 0
+  const needsCodeSetting = handsOn && image.status === 'error' && /run example code/i.test(image.error ?? '')
   // Images that build on each other share one source, so they look like the same data taken further.
   const bases = buildOnChoices(image, images)
   const base = images.find((other) => other.slot_id === image.builds_on)
@@ -98,7 +113,35 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           Why this one: {/[.!?]$/.test(room.why) ? room.why : `${room.why}.`}
         </p>
       )}
-      {image.status === 'error' && <Notice tone="error">{image.error}</Notice>}
+      {image.status === 'error' && (
+        <Notice tone="error">
+          {image.error}
+          {needsCodeSetting && (
+            <>
+              {' '}
+              <Link to="/settings" className="font-semibold underline">
+                Open Settings
+              </Link>
+            </>
+          )}
+        </Notice>
+      )}
+      {handsOn && image.hands_on && !busy && (
+        <p className="mt-1 text-center text-xs text-muted" aria-label="The code behind this picture">
+          Made by running the code above: {image.hands_on.lines} lines
+          {image.hands_on.library ? ` of ${HANDS_ON_LIBRARY[image.hands_on.library] ?? image.hands_on.library}` : ''},{' '}
+          {image.hands_on.chars.toLocaleString('en-US')} characters
+        </p>
+      )}
+      {handsOn && image.hands_on?.stale && !busy && (
+        <div className="mt-2">
+          <Notice tone="warn" title="The code above changed since this picture was made">
+            <Button size="sm" variant="secondary" className="mt-2" icon={<Dices className="size-4" />} onClick={() => redraw(false)}>
+              Rerun code
+            </Button>
+          </Notice>
+        </div>
+      )}
       {job.status === 'failed' && <Notice tone="error">{job.error}</Notice>}
       {mutations.upload.error && <Notice tone="error">{errorText(mutations.upload.error)}</Notice>}
       {textNote && !busy && (
@@ -168,25 +211,31 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
       )}
 
       <div className="mt-3 flex flex-wrap justify-center gap-2" aria-label={`Actions for ${KIND_LABEL[image.kind] ?? 'image'}`}>
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Lightbulb className="size-4" />}
-          onClick={() => (room ? setOpen('ideas') : redraw(true))}
-          disabled={busy}
-          title="Every idea pitched for this image: pick one, pitch new ones with a steer, or try another format"
-        >
-          Ideas
-        </Button>
+        {!handsOn && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<Lightbulb className="size-4" />}
+            onClick={() => (room ? setOpen('ideas') : redraw(true))}
+            disabled={busy}
+            title="Every idea pitched for this image: pick one, pitch new ones with a steer, or try another format"
+          >
+            Ideas
+          </Button>
+        )}
         <Button
           size="sm"
           variant="secondary"
           icon={<Dices className="size-4" />}
           onClick={() => redraw(false)}
           disabled={busy}
-          title="Claude critiques this image, then redraws the same idea to fix its weakest point"
+          title={
+            handsOn
+              ? 'Run the code above again and keep the chart it draws'
+              : 'Claude critiques this image, then redraws the same idea to fix its weakest point'
+          }
         >
-          Redraw
+          {handsOn ? 'Rerun code' : 'Redraw'}
         </Button>
         {canRemix && (
           <Button
@@ -200,19 +249,19 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
             Remix
           </Button>
         )}
-        {drawn && (
+        {(drawn || handsOn) && (
           <Button
             size="sm"
             variant="secondary"
             icon={<Wand2 className="size-4" />}
             onClick={() => setOpen('edit')}
             disabled={busy}
-            title="Tell Claude what to change; the rest stays"
+            title={handsOn ? 'Tell Claude what to change in the code; it updates the post and runs it again' : 'Tell Claude what to change; the rest stays'}
           >
-            Edit
+            {handsOn ? 'Edit code' : 'Edit'}
           </Button>
         )}
-        {slots.length > 0 && (
+        {!handsOn && slots.length > 0 && (
           <Button
             size="sm"
             variant="secondary"

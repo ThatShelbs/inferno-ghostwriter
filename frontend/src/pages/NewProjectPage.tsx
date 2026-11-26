@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { errorText } from '../api/client'
-import { useActivePersona, useIdea, useProjectMutations } from '../api/hooks'
+import { useActivePersona, useIdea, useProjectMutations, useSettings } from '../api/hooks'
 import { PLATFORMS, buildDials, emptyDials, shownDials, type DialsState, type Platform } from './dials'
 import { BrandKitFields } from '../components/BrandKitFields'
 import { emptyBrandKit, isEmptyBrandKit } from '../lib/brandKit'
@@ -12,6 +12,7 @@ import { FormulaFields } from '../components/FormulaFields'
 import { OpeningFields } from '../components/OpeningFields'
 import { Button, Card, Field, Notice, PageHeader, Select, Switch, Textarea } from '../components/ui'
 import { cx } from '../lib/cx'
+import { BAKE_OFF_PROMPT, BAKE_OFF_SCENARIOS } from '../lib/experiment'
 import { useHotkey } from '../lib/hotkeys'
 
 const EXAMPLE = `Why most A/B tests at big companies are underpowered
@@ -23,6 +24,11 @@ const EXAMPLE = `Why most A/B tests at big companies are underpowered
 const MODES = [
   ['standard', 'Generate & tweak', 'One post in your voice, then refine it with feedback.'],
   ['ab', 'A/B test', 'Two posts: one as your persona is, one with its settings nudged. Pick the better one blind. About twice the cost.'],
+  [
+    'experiment',
+    'Library bake-off',
+    'Run one prompt through several answers (one per Python library), keep each prompt and code word for word, and show the chart each really draws.',
+  ],
 ] as const
 
 export function NewProjectPage() {
@@ -33,7 +39,10 @@ export function NewProjectPage() {
   const [custom, setCustom] = useState(false)
   const [dials, setDials] = useState<DialsState>(emptyDials)
   const [brandKit, setBrandKit] = useState(emptyBrandKit)
-  const [mode, setMode] = useState<'standard' | 'ab'>('standard')
+  const [mode, setMode] = useState<'standard' | 'ab' | 'experiment'>('standard')
+  const [scenarioIds, setScenarioIds] = useState<string[]>(BAKE_OFF_SCENARIOS.map((s) => s.id))
+  const [runCode, setRunCode] = useState(true)
+  const { data: appSettings } = useSettings()
   const [interviewChoice, setInterview] = useState<boolean | null>(null)
   const set = (patch: Partial<DialsState>) => setDials((d) => ({ ...d, ...patch }))
 
@@ -62,8 +71,11 @@ export function NewProjectPage() {
         prompt,
         dials: buildDials(dials),
         persona_id: persona?.id,
-        mode,
+        mode: mode === 'ab' ? 'ab' : 'standard',
         interview,
+        ...(mode === 'experiment'
+          ? { experiment: { prompt: prompt.trim(), run_code: runCode, scenarios: BAKE_OFF_SCENARIOS.filter((s) => scenarioIds.includes(s.id)) } }
+          : {}),
         ...(isEmptyBrandKit(brandKit) ? {} : { brand_kit: brandKit }),
         ...(seeded ? { idea_id: seeded } : {}),
       },
@@ -131,7 +143,7 @@ export function NewProjectPage() {
               </Link>
             </div>
           )}
-          <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="How to write it">
+          <div className="grid gap-2 sm:grid-cols-3" role="radiogroup" aria-label="How to write it">
             {MODES.map(([value, title, hint]) => (
               <button
                 key={value}
@@ -146,6 +158,48 @@ export function NewProjectPage() {
               </button>
             ))}
           </div>
+          {mode === 'experiment' && (
+            <div className="space-y-3 rounded-xl border border-line px-4 py-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-semibold">One answer per scenario</p>
+                <Button variant="ghost" size="sm" onClick={() => setPrompt(BAKE_OFF_PROMPT)}>
+                  Use the stacked bar chart prompt
+                </Button>
+              </div>
+              <p className="text-sm text-muted">
+                The prompt above is sent as written, once per scenario, to Claude Opus 5.5 with one added line naming the library. The post prints each prompt
+                and the full code that came back, with its measured line and character counts, and the chart that code draws.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {BAKE_OFF_SCENARIOS.map((s) => (
+                  <label key={s.id} className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={scenarioIds.includes(s.id)}
+                      onChange={(e) => setScenarioIds((ids) => (e.target.checked ? [...ids, s.id] : ids.filter((id) => id !== s.id)))}
+                    />
+                    {s.label}
+                  </label>
+                ))}
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-semibold">Run the code and draw each chart</p>
+                  <p className="text-sm text-muted">Runs the returned code on this computer. Off: the post shows the code without charts.</p>
+                </div>
+                <Switch checked={runCode} label="Run the code and draw each chart" onChange={setRunCode} />
+              </div>
+              {runCode && appSettings && !appSettings.allow_code_execution && (
+                <Notice>
+                  Running code is off.{' '}
+                  <Link to="/settings" className="font-semibold underline">
+                    Turn on “Run example code” in Settings
+                  </Link>{' '}
+                  or the post will show the code without charts.
+                </Notice>
+              )}
+            </div>
+          )}
           {mode === 'standard' && (
             <div className="flex items-center justify-between gap-4 rounded-xl border border-line px-4 py-3">
               <div>
@@ -166,7 +220,7 @@ export function NewProjectPage() {
             loading={create.isPending}
             title="Ctrl/Cmd + Enter"
           >
-            {mode === 'ab' ? 'Write two versions' : interview ? 'Ask me a few questions' : 'Write my post'}
+            {mode === 'ab' ? 'Write two versions' : mode === 'experiment' ? 'Run the experiment' : interview ? 'Ask me a few questions' : 'Write my post'}
           </Button>
         </Card>
 

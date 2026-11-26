@@ -15,6 +15,8 @@ from inferno_ghostwriter.authenticity import analyze, author_profile
 from inferno_ghostwriter.authenticity.passages import anchor_passages, format_anchors
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectReference, Sample, utcnow
+from inferno_ghostwriter.experiments.compose import broken_by
+from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.llm import LLM, ResearchResult, SystemBlock
 from inferno_ghostwriter.prompts import raw, render
 from inferno_ghostwriter.voice import current_voice_profile, format_exemplars, select_exemplars
@@ -200,6 +202,13 @@ async def rewrite_passage(
         if scores is not None and scores[1] > scores[0]:
             raise WriterError("The rewrite read less like you than the original, so nothing changed. Try again for another take.")
     new_markdown = finish_text(project.markdown.replace(selection, replacement, 1), project.plan)
+    if (experiment := load_experiment(project.experiment)) is not None and (
+        broken := broken_by(project.markdown, new_markdown, experiment)
+    ):
+        raise WriterError(
+            "That change would alter a prompt or code the experiment prints word for word (" + broken[0] + "). "
+            "Select text outside those blocks, or use Rerun on the scenario."
+        )
     title, subtitle = split_title(new_markdown)
     authenticity = await analyze(
         llm=llm,

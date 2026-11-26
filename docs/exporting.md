@@ -47,14 +47,19 @@ Tutorials, how-tos, data analysis, data-viz and prompt posts are better when rea
   data/chart_<slot>.csv       the exact numbers behind each chart in the post (from the chart's own spec)
   make_data.py                seeded synthetic data (or a library's built-in sample dataset) for everything else
   code/01_*.py                the post's main examples as standalone scripts
+  code/NN_<library>_<slot>.py the code above each hands-on data viz image, exactly as the article shows it
   prompts/starter_prompts.md  the post's prompts plus starters to adapt, with [BRACKETED] blanks
+  prompts/NN_<scenario>.md    (library experiments) one file per prompt that was run, one copyable block each
+  prompts/README.md           (library experiments) an index of those prompt files
   assets/                     every image in the post, with credits.md
   requirements.txt            the packages the code imports
   README.md, LICENSE (MIT), .gitignore
 ```
 
 - **Beginner code, polished charts.** Cells are short, top to bottom, with almost no functions and comments that say why. Charts have takeaway titles, labelled axes, source notes and the inferno colours (`COLORS`, defined in the setup cell). The chart library is the one the post teaches, else Altair (Vega-Lite) and Plotly Express; pick another under **Charts**.
-- **The app never runs the code.** Every block is parsed, may import only the standard library and a beginner data stack, and may not shell out; a block that still fails after the retry is left out and listed. The post's own images sit next to the chart cells, so readers see the expected result.
+- **Hands-on data viz images ship their own code.** For every image made by running the code above it, the kit takes that article block byte for byte (`code/NN_<library>_<slot>.py`) and puts it in a notebook cell right after the image. Claude is not asked to recreate those charts, and `requirements.txt` lists the union of the libraries those blocks import (Bokeh, Altair, Matplotlib, Plotly, Seaborn and so on).
+- **Library experiments** get one prompt file per scenario (`prompts/NN_<scenario>.md`): the exact text that was sent to the model, in a single fenced block, so GitHub's copy button copies precisely what was run; the app shows the same prompts with copy buttons. The README adds a table of lines of code and characters per scenario (measured from the saved code), and the model-written starter prompts are not added.
+- **The kit never runs code.** (Only the images made by running the post's example code do, in the app and only if you allow it; see `docs/experiments.md`.) Every block the model writes for the kit is parsed, may import only the standard library and a beginner data stack, and may not shell out; a block that still fails after the retry is left out and listed. The post's own images sit next to the chart cells, so readers see the expected result.
 - **Optional:** the article's live link (shown in the README and notebook) and a note for the kit ("use the public penguins dataset").
 - **Download kit (.zip)** any time.
 

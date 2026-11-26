@@ -7,7 +7,7 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Literal
+from typing import Any, Literal
 
 from inferno_ghostwriter.config import ImageRoute, SecondaryProvider, Settings, WritingProvider
 from inferno_ghostwriter.llm.base import (
@@ -236,9 +236,11 @@ class RoutingLLM:
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
         on_reset: OnReset | None = None,
+        model: str | None = None,
     ) -> str:
-        preferred = self._preferred(task)
-        fallback = [provider for provider in self._fallback(task, None) if provider != preferred]
+        # A named Claude model is an experiment's own choice: it never goes to an optional model.
+        preferred: Any = "claude" if model else self._preferred(task)
+        fallback = [] if model else [provider for provider in self._fallback(task, None) if provider != preferred]
 
         streamed = False
 
@@ -277,6 +279,7 @@ class RoutingLLM:
                 max_tokens=max_tokens,
                 on_delta=delta if on_delta and fallback else on_delta,
                 usage=tap(usage, "claude", task),
+                model=model,
             )
         except LLMLimitError:
             # The preview is append-only. Do not append another provider's draft to a partial Claude draft.

@@ -120,7 +120,8 @@ def drop_broken(design: KitDesign) -> tuple[KitDesign, list[str]]:
     )
 
 
-def charts_block(charts: list[ChartData], others: list[tuple[str, str, str]]) -> str:
+def charts_block(charts: list[ChartData], others: list[tuple[str, str, str]], covered: list[tuple[str, str]] | None = None) -> str:
+    """The post's pictures for the prompt. ``covered`` are (slot id, what it shows) hands-on charts: the post's own code draws them."""
     lines: list[str] = []
     for chart in charts:
         sample = json.dumps(chart.rows[:3], ensure_ascii=False)
@@ -130,6 +131,10 @@ def charts_block(charts: list[ChartData], others: list[tuple[str, str, str]]) ->
         )
     for slot_id, kind, about in others:
         lines.append(f"- `{slot_id}` ({kind}): {about}. No data file; recreate it only if it is a plot of numbers (make the data).")
+    for slot_id, about in covered or []:
+        lines.append(
+            f"- `{slot_id}` (hands-on chart): {about}. Covered by the post's own code, which the kit ships as it is: do NOT recreate it."
+        )
     return "\n".join(lines) or "(The post has no charts or diagrams.)"
 
 
@@ -144,6 +149,7 @@ async def design_kit(
     note: str,
     charts: list[ChartData],
     others: list[tuple[str, str, str]],
+    covered: list[tuple[str, str]] | None = None,
 ) -> tuple[KitDesign, list[str]]:
     """The kit's design and notes on anything left out. One retry quotes the check's findings."""
     choice = (
@@ -159,7 +165,7 @@ async def design_kit(
         library=choice,
         colors=", ".join(f'"{c}"' for c in COLORS),
         allowed=", ".join(sorted(PACKAGES)),
-        charts=charts_block(charts, others),
+        charts=charts_block(charts, others, covered),
         note=note.strip() or "(none)",
     )
     design = await llm.structured(

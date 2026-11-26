@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Any
 
 from inferno_ghostwriter.db import Project, ProjectImage
+from inferno_ghostwriter.experiments import compose as experiment_compose
+from inferno_ghostwriter.experiments.models import Experiment
+from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.export.render import Figure, figures_for, markdown_with_images
-from inferno_ghostwriter.images import PLACEHOLDER_RE
+from inferno_ghostwriter.images import PLACEHOLDER_RE, handson
+from inferno_ghostwriter.images.codeblocks import code_before
 from inferno_ghostwriter.kit.check import requirements
 from inferno_ghostwriter.kit.design import COLORS, ChartData, KitDesign
 from inferno_ghostwriter.writer import split_title
@@ -91,13 +95,110 @@ def chart_data(images: list[ProjectImage]) -> list[ChartData]:
     return out
 
 
-def other_images(images: list[ProjectImage], charts: list[ChartData]) -> list[tuple[str, str, str]]:
-    with_data = {c.slot_id for c in charts}
+def other_images(images: list[ProjectImage], charts: list[ChartData], covered: set[str] | None = None) -> list[tuple[str, str, str]]:
+    """Images the model may recreate; charts with data and hands-on images (their code is the post's own) are left out."""
+    skip = {c.slot_id for c in charts} | (covered or set())
     return [
         (i.slot_id, i.kind, i.alt or i.purpose or i.caption)
         for i in sorted(images, key=lambda i: i.position)
-        if i.status == "ready" and i.slot_id not in with_data and i.kind not in CLOSE_ROOMS and i.slot_id not in CLOSE_ROOMS
+        if i.status == "ready" and i.slot_id not in skip and i.kind not in CLOSE_ROOMS and i.slot_id not in CLOSE_ROOMS
     ]
+
+
+# -- the post's own code -------------------------------------------------------------------------
+
+
+@dataclass
+class OwnCode:
+    """A code example from the post (or an experiment answer), kept byte for byte as a script of the kit."""
+
+    file: str
+    title: str
+    code: str
+    library: str
+    slot_id: str = ""
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "example"
+
+
+def experiment_of(project: Project) -> Experiment | None:
+    """The post's library experiment, if it has one (a bad saved value counts as none)."""
+    try:
+        return load_experiment(getattr(project, "experiment", None))
+    except ValueError:
+        return None
+
+
+def own_code(project: Project, images: list[ProjectImage]) -> list[OwnCode]:
+    """The code above every ready hands-on image, exactly as the article shows it, numbered in reading order.
+
+    Experiment answers that were not drawn (code only, or the run failed) still ship as scripts."""
+    out: list[OwnCode] = []
+    for image in sorted(images, key=lambda i: i.position):
+        if image.kind != "hands_on_viz" or image.provider != handson.PROVIDER or image.status != "ready":
+            continue
+        block = code_before(project.markdown or "", image.slot_id)
+        if block is None or not block.code.strip():
+            continue
+        library = str(handson.load_spec(image.spec).get("library") or handson.library_of(block.code))
+        name = _slug(f"{library}_{image.slot_id}" if library else image.slot_id)
+        title = image.alt or f"The chart {image.slot_id} draws"
+        out.append(OwnCode(f"{len(out) + 1:02d}_{name}.py", title, block.code, library, image.slot_id))
+    experiment = experiment_of(project)
+    if experiment is not None:
+        drawn = {c.slot_id for c in out}
+        for scenario in experiment.scenarios:
+            if scenario.code.strip() and scenario.slot_id not in drawn:
+                library = scenario.library or handson.library_of(scenario.code)
+                out.append(OwnCode(f"{len(out) + 1:02d}_{_slug(scenario.id)}.py", scenario.label, scenario.code, library))
+    return out
+
+
+@dataclass
+class KitPrompt:
+    file: str
+    title: str
+    text: str
+
+
+def experiment_prompts(experiment: Experiment) -> list[KitPrompt]:
+    """One prompt per scenario, exactly the text that was sent to the model."""
+    return [
+        KitPrompt(f"prompts/{i + 1:02d}_{_slug(s.id)}.md", s.label, experiment.prompt_for(s)) for i, s in enumerate(experiment.scenarios)
+    ]
+
+
+def kit_prompts(project: Project, design: KitDesign | None) -> list[KitPrompt]:
+    """The prompts a reader can copy: an experiment's exact prompts, else the model-written starters."""
+    experiment = experiment_of(project)
+    if experiment is not None:
+        return experiment_prompts(experiment)
+    return [KitPrompt("prompts/starter_prompts.md", p.title, p.prompt.strip()) for p in (design.prompts if design else [])]
+
+
+def _prompt_file(prompt: KitPrompt) -> str:
+    lines = [
+        f"# {prompt.title}",
+        "",
+        "The exact prompt that was run. Copy it as it is:",
+        "",
+        experiment_compose.fenced(prompt.text, "text"),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _prompts_index(prompts: list[KitPrompt]) -> str:
+    out = [
+        "# Prompts",
+        "",
+        "One file per prompt, exactly as it was run. Each file holds a single block, so GitHub's copy button copies the whole prompt.",
+        "",
+    ]
+    out += [f"- [{p.title}]({p.file.removeprefix('prompts/')})" for p in prompts]
+    return "\n".join(out) + "\n"
 
 
 def _csv(chart: ChartData) -> bytes:
@@ -214,6 +315,8 @@ def notebook(
     author: str,
     repo: Repo | None,
     article_url: str = "",
+    own: list[OwnCode] | None = None,
+    prompts: list[KitPrompt] | None = None,
 ) -> bytes:
     title, _ = split_title(project.markdown)
     title = title or project.title or "this post"
@@ -227,9 +330,21 @@ def notebook(
         at = _anchor_index(cell.anchor, blocks)
         (after.setdefault(at, []) if at is not None else loose).append((f"**Try it:** {cell.lead_in}", cell.code))
     image_at = {m.group(1): i for i, b in enumerate(blocks) if (m := PLACEHOLDER_RE.fullmatch(b.strip()))}
+    own = own or []
+    covered = {c.slot_id for c in own if c.slot_id}
     for chart in design.charts:
+        if chart.slot_id in covered:
+            continue  # the post's own code draws this one
         at = image_at.get(chart.slot_id)
         (after.setdefault(at, []) if at is not None else loose).append((f"**Rebuild this chart:** {chart.lead_in}", chart.code))
+    for item in own:
+        at = image_at.get(item.slot_id) if item.slot_id else None
+        if at is not None:
+            after.setdefault(at, []).append(
+                (f"**Run it:** the code from the article that draws this chart (also `code/{item.file}`).", item.code)
+            )
+        else:
+            loose.append((f"**{item.title}** (`code/{item.file}`)", item.code))
 
     nb = _Notebook()
     by = f" by {author}" if author else ""
@@ -276,10 +391,12 @@ def notebook(
     flush()
 
     ending = ["---", "## Keep going"]
-    if design.prompts:
-        ending.append("Starter prompts from this post are in `prompts/starter_prompts.md`.")
-    if design.scripts:
-        ending.append("Standalone scripts: " + ", ".join(f"`code/{s.file}`" for s in design.scripts) + ".")
+    if prompts:
+        one_each = prompts[0].file != "prompts/starter_prompts.md"
+        ending.append(f"The prompts from this post are in {'`prompts/`, one file each' if one_each else '`prompts/starter_prompts.md`'}.")
+    scripts = [f"`code/{s.file}`" for s in design.scripts] + [f"`code/{c.file}`" for c in own]
+    if scripts:
+        ending.append("Standalone scripts: " + ", ".join(scripts) + ".")
     nb.markdown("\n\n".join(ending))
     for lead_in, code in loose:
         nb.markdown(lead_in)
@@ -290,7 +407,16 @@ def notebook(
 # -- the other files -----------------------------------------------------------------------------
 
 
-def readme(project: Project, design: KitDesign, files: list[str], *, author: str, repo: Repo | None, article_url: str) -> str:
+def readme(
+    project: Project,
+    design: KitDesign,
+    files: list[str],
+    *,
+    author: str,
+    repo: Repo | None,
+    article_url: str,
+    experiment: Experiment | None = None,
+) -> str:
     title, subtitle = split_title(project.markdown)
     title = title or project.title or "Hands-on kit"
     out = [f"# {title}", ""]
@@ -334,12 +460,22 @@ def readme(project: Project, design: KitDesign, files: list[str], *, author: str
         "make_data.py": "makes the rest of the data",
         "code/": "the main examples as standalone scripts",
         "prompts/starter_prompts.md": "prompts from the post, ready to adapt",
+        "prompts/README.md": "the exact prompts that were run, one file each, ready to copy",
         "assets/": "every image in the article",
         "requirements.txt": "the Python packages the code uses",
     }
     present = set(files) | {f.split("/")[0] + "/" for f in files if "/" in f}
     out += ["## What's inside", "", "| Path | What it is |", "| --- | --- |"]
     out += [f"| `{path}` | {about} |" for path, about in guide.items() if path in present]
+    if experiment is not None and any(s.code for s in experiment.scenarios):
+        out += [
+            "",
+            "## The experiment",
+            "",
+            "The same prompt, one answer per scenario, each run for real. Counts are measured from the saved code.",
+            "",
+        ]
+        out += experiment_compose.comparison_table(experiment).rstrip().split("\n")
     out += ["", "## License", "", "MIT: see `LICENSE`. Images are credited in `assets/credits.md`.", ""]
     return "\n".join(out)
 
@@ -425,20 +561,36 @@ def kit_files(
         files["make_data.py"] = _make_data(design).encode()
     for script in design.scripts:
         files[f"code/{script.file}"] = (f'# {script.title}, from "{title}"\n\n' + script.code.strip() + "\n").encode()
-    if design.prompts:
+    # The post's own code, byte for byte: the picture beside it was made by exactly this.
+    own = own_code(project, ready)
+    for item in own:
+        files[f"code/{item.file}"] = (item.code.rstrip("\n") + "\n").encode()
+    experiment = experiment_of(project)
+    prompts = kit_prompts(project, design)
+    if experiment is not None:
+        for prompt in prompts:
+            files[prompt.file] = _prompt_file(prompt).encode()
+        files["prompts/README.md"] = _prompts_index(prompts).encode()
+    elif design.prompts:
         files["prompts/starter_prompts.md"] = _prompts_md(title, design).encode()
     files["article.md"] = markdown_with_images(project.markdown, figures, prefix="assets/").encode()
-    files[NOTEBOOK] = notebook(project, figures, design, charts, author=author, repo=repo, article_url=article_url)
+    files[NOTEBOOK] = notebook(
+        project, figures, design, charts, author=author, repo=repo, article_url=article_url, own=own, prompts=prompts
+    )
+    covered = {c.slot_id for c in own if c.slot_id}
     code = (
         [d.code for d in design.datasets]
         + [c.code for c in design.cells]
-        + [c.code for c in design.charts]
+        + [c.code for c in design.charts if c.slot_id not in covered]
         + [s.code for s in design.scripts]
+        + [c.code for c in own]
     )
     files["requirements.txt"] = ("\n".join(requirements(code)) + "\n").encode()
     files["LICENSE"] = mit_license(author).encode()
     files[".gitignore"] = GITIGNORE.encode()
-    files["README.md"] = readme(project, design, sorted(files), author=author, repo=repo, article_url=article_url).encode()
+    files["README.md"] = readme(
+        project, design, sorted(files), author=author, repo=repo, article_url=article_url, experiment=experiment
+    ).encode()
     return dict(sorted(files.items()))
 
 
