@@ -58,7 +58,7 @@ def test_the_number_of_added_slots_is_capped() -> None:
     post = "## A\n\n" + "\n\n".join([PLOT] * 12) + "\n"
     _, slots = settle_slots(post, [HERO, MEME], "lots")
     assert len([s for s in slots if s.kind == "hands_on_viz"]) == MAX_EXTRA
-    full = [slot(f"img{i}", "chart") for i in range(2, MAX_IMAGES)]  # hero + 13 + meme = 15 slots
+    full = [slot(f"img{i}", "chart") for i in range(2, MAX_IMAGES)]  # hero + middle images + meme = MAX_IMAGES slots
     _, slots = settle_slots(post, [HERO, *full, MEME], "lots")
     assert len(slots) == MAX_IMAGES
 

@@ -261,7 +261,7 @@ function SettingsTab({ persona }: { persona: PersonaOut }) {
         <Slider
           label="Images per post"
           min={0}
-          max={12}
+          max={22}
           value={draft.default_image_count}
           onChange={(v) => set({ default_image_count: v === 1 ? 2 : v })}
           format={(v) => (v === 0 ? `Automatic (~${autoImageCount(draft.default_target_words)})` : `${v} images`)}

@@ -20,7 +20,7 @@ KIND = "hands_on_viz"
 PLOT_LIBRARIES = frozenset({"matplotlib", "seaborn", "plotly", "altair", "bokeh", "plotnine"})
 PYTHON = {"python", "py", "python3", ""}
 MAX_EXTRA = 8
-MAX_IMAGES = 15
+MAX_IMAGES = 22
 MAX_FEW = 2
 
 EXAMPLE_RULES = (
