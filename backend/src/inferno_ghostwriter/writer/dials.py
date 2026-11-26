@@ -187,7 +187,7 @@ class Dials(FormulaParts):
     """
 
     target_words: int | None = Field(None, ge=300, le=6000)
-    image_count: int | None = Field(None, ge=2, le=15)
+    image_count: int | None = Field(None, ge=2, le=22)
     # External references worked into the post (0 = none); the kinds the mix may draw from (empty = all).
     reference_count: int | None = Field(None, ge=0, le=12)
     reference_kinds: list[ReferenceKind] | None = None

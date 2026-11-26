@@ -141,7 +141,7 @@ A **hands-on data viz** image is the chart a Python example in the post draws. I
 | `few` | At most two, only where a code example draws a chart the reader should compare with the text |
 | `none` | The kind is not used |
 
-It is always `none` while running code is off or the post has no code (`include_code` = no). `writer/handson_slots.py` keeps the post and the slots in agreement: a hands-on slot with no code above it becomes an ordinary chart, and in `lots` mode extra slots are added (at most 8, never past 15 images).
+It is always `none` while running code is off or the post has no code (`include_code` = no). `writer/handson_slots.py` keeps the post and the slots in agreement: a hands-on slot with no code above it becomes an ordinary chart, and in `lots` mode extra slots are added (at most 8, never past 22 images).
 
 **What is verified.** `backend/scripts/experiment_smoke.py` draws a stacked bar chart with matplotlib, seaborn, plotly, altair and bokeh through the real sandbox (free, no model call). The unit tests cover finding and replacing the block, the repair round, the stale check, the slot backstop, the environment scrubbing and the code check; tests and demo mode replace the sandbox with `NoSandbox`.
 
@@ -240,7 +240,7 @@ An image and the sentences around it should agree (`writer/image_text.py`, `writ
 
 **After a redraw, the text is checked.** When Redraw, *New idea*, another idea or format, **Edit** or *Redraw all* changes what an image is, the same job asks Claude for small find/replace edits to any sentence that described the old picture (`prompts/image_text_sync.md`), given what each image was and is now (`describe_image`). Most redraws change nothing. When text changes, the card shows a note and **Undo last change** reverts it (`Project.revisions`, kind `image`). The check never fails a redraw (`text_error`), is skipped while another text job runs, and does not run for uploads, version restores, finalist picks, **Words** or a feedback tweak's own redraws.
 
-**Add an image at a highlight.** Highlight text in the Preview (or the Markdown editor) and click **Add image** (`POST /api/projects/{id}/images`, job `add_image`). Claude (`prompts/image_add.md`) picks the kind, what it shows, the paragraph or sentence it follows and any adjacent sentence to change. Code picks a safe break (`place_placeholder`: never inside a code block, list, table or quote, never between a lead-in and its example, never after the closing meme), adds the next `imgN` slot to the plan and puts the row in reading order. At most 15 images per post. **Undo last change** takes the image and its text edits out together.
+**Add an image at a highlight.** Highlight text in the Preview (or the Markdown editor) and click **Add image** (`POST /api/projects/{id}/images`, job `add_image`). Claude (`prompts/image_add.md`) picks the kind, what it shows, the paragraph or sentence it follows and any adjacent sentence to change. Code picks a safe break (`place_placeholder`: never inside a code block, list, table or quote, never between a lead-in and its example, never after the closing meme), adds the next `imgN` slot to the plan and puts the row in reading order. At most 22 images per post. **Undo last change** takes the image and its text edits out together.
 
 ## The Cartoon Character Kit
 

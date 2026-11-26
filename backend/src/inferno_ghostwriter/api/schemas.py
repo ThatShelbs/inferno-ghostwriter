@@ -118,7 +118,7 @@ class PersonaDefaults(BaseModel):
     default_education: Education | None = None
     default_target_words: int | None = Field(None, ge=300, le=6000)
     # 0 = choose automatically from the length.
-    default_image_count: int | None = Field(None, ge=0, le=15)
+    default_image_count: int | None = Field(None, ge=0, le=22)
     # null = choose from the length (at least 5), 0 = no references.
     default_reference_count: int | None = Field(None, ge=0, le=12)
     default_storytelling: int | None = Field(None, ge=0, le=10)

@@ -29,7 +29,7 @@ from inferno_ghostwriter.writer.pipeline import WriterError, writer_system
 from inferno_ghostwriter.writer.schemas import ImagePlacement, ImageSlot
 from inferno_ghostwriter.writer.tweak import apply_edits, finish_text, locate, plan_slots
 
-MAX_IMAGES = 15
+MAX_IMAGES = 22
 _SENTENCE_END = re.compile(r"[.!?][)\"'”’*_]*$")
 # Blocks the image moves past rather than sits next to.
 _SKIP = ("heading", "subheading", "image")

@@ -54,7 +54,7 @@ export function DialsFields({
           />
           Choose the number of images automatically
         </label>
-        {imageCount !== null && <Slider label="Images" min={2} max={12} value={imageCount} onChange={(v) => onChange({ imageCount: v })} />}
+        {imageCount !== null && <Slider label="Images" min={2} max={22} value={imageCount} onChange={(v) => onChange({ imageCount: v })} />}
       </div>
       <div className="space-y-2">
         <label className="flex items-center gap-2 text-sm">

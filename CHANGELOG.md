@@ -4,6 +4,10 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ## [Unreleased]
 
+### Changed
+
+- **Up to 22 images per post.** Room for an opener, a closing meme and a top-20 list in between. The Images sliders now go to 22 (they stopped at 12).
+
 ### Fixed
 
 - **The finalist thumbnails follow your redraws.** After Redraw, Remix, Edit or a picked idea, the strip under an image kept showing the judge's old three pictures. The new picture now takes the place of the finalist it came from (labelled *Your latest version*) and the other two stay as alternatives; earlier pictures are still in *Versions*.
