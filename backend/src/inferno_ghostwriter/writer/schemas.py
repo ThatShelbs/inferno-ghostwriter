@@ -88,10 +88,21 @@ class ImageChange(BaseModel):
     brief: str = Field(description="What the redrawn image should show.")
 
 
+class NewImage(BaseModel):
+    kind: Literal["illustration", "diagram", "chart", "icon"] = Field(description="The image that adds the most value there.")
+    purpose: str = Field(description="The value this image adds for the reader, in one sentence.")
+    brief: str = Field(description="What the image should show, concretely enough to draw, mirroring the passage's own terms.")
+    anchor_text: str = Field(description="The exact paragraph or sentence (copied from the post) the image goes right after.")
+
+
 class PostEdits(BaseModel):
     summary: str = Field(description="One or two plain sentences telling the author what changed.")
     edits: list[TextEdit] = Field(description="Surgical text edits, in order; only what the feedback asks for.")
     image_changes: list[ImageChange] = Field(description="Images to redraw because the feedback is about them; usually empty.")
+    new_images: list[NewImage] = Field(
+        default_factory=list,
+        description='Brand-new images the feedback asks for ("add more images", "show this with a diagram"); empty otherwise.',
+    )
 
 
 ReferencePlacement = Literal["inline", "blockquote", "go_deeper"]
