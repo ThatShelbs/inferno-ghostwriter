@@ -97,6 +97,12 @@ export interface ArticleType {
   signals?: string[];
 }
 
+export interface Attempt {
+  code: string;
+  reply?: string;
+  error?: string;
+}
+
 export interface AuthStatusOut {
   signed_in: boolean;
   source: string;
@@ -203,6 +209,7 @@ export interface Dials {
   audience?: string | null;
   platform?: "medium" | "substack" | "linkedin" | "x" | "gumroad" | "markdown" | null;
   include_code?: "auto" | "yes" | "no" | null;
+  hands_on_charts?: "auto" | "lots" | "few" | "none" | null;
   revision_passes?: number | null;
   opening_style?: string | null;
   opening_note?: string | null;
@@ -263,6 +270,22 @@ export interface EvolutionOut {
 
 export interface EvolveIn {
   kind: "edits" | "secret_sauce";
+}
+
+export interface Experiment {
+  prompt: string;
+  model?: string;
+  scenarios: Scenario[];
+  run_code?: boolean;
+  montage_slot?: string;
+  environment?: Record<string, unknown>;
+}
+
+export interface ExperimentIn {
+  prompt: string;
+  model?: string;
+  scenarios?: ScenarioIn[] | null;
+  run_code?: boolean;
 }
 
 export interface FinalistOut {
@@ -371,6 +394,13 @@ export interface GitHubStatusOut {
   login: string;
   message: string;
   sign_in_command: string;
+}
+
+export interface HandsOnOut {
+  library: string;
+  lines: number;
+  chars: number;
+  stale?: boolean;
 }
 
 export interface Health {
@@ -598,6 +628,7 @@ export interface ImageOut {
   builds_on?: string;
   remix?: RemixOut | null;
   remix_dimensions?: string[];
+  hands_on?: HandsOnOut | null;
 }
 
 export interface ImageRoomOut {
@@ -715,6 +746,13 @@ export interface KitOut {
   default_name: string;
   linked: boolean;
   libraries: KitLibraryOut[];
+  prompts?: KitPromptOut[];
+}
+
+export interface KitPromptOut {
+  file: string;
+  title: string;
+  text: string;
 }
 
 export interface KitPushIn {
@@ -807,6 +845,7 @@ export interface PersonaOut {
   default_technical_depth: number;
   default_skimmability: number;
   default_include_code: string;
+  default_hands_on_charts: string;
   default_platform: string;
   default_formula: FormulaParts;
   default_opening_style: string;
@@ -845,6 +884,7 @@ export interface PersonaUpdate {
   default_technical_depth?: number | null;
   default_skimmability?: number | null;
   default_include_code?: "auto" | "yes" | "no" | null;
+  default_hands_on_charts?: "auto" | "lots" | "few" | "none" | null;
   default_platform?: "medium" | "substack" | "linkedin" | "x" | "gumroad" | "markdown" | null;
   default_formula?: FormulaParts | null;
   default_opening_style?: string | null;
@@ -911,6 +951,7 @@ export interface ProjectCreate {
   mode?: "standard" | "ab";
   idea_id?: number | null;
   interview?: boolean;
+  experiment?: ExperimentIn | null;
 }
 
 export interface ProjectCreated {
@@ -950,6 +991,7 @@ export interface ProjectOut {
   edit_rate: number | null;
   evolutions: EvolutionOut[];
   ab_test?: ABTestSummary | null;
+  experiment?: Experiment | null;
   idea_id?: number | null;
   created_at: string;
   updated_at: string;
@@ -1117,6 +1159,29 @@ export interface SampleWritingOut {
   author: string;
 }
 
+export interface Scenario {
+  id: string;
+  label: string;
+  library?: string;
+  addendum?: string;
+  status?: "pending" | "running" | "ready" | "code_only" | "error";
+  code?: string;
+  reply?: string;
+  lines?: number;
+  chars?: number;
+  error?: string;
+  attempts?: Attempt[];
+  slot_id?: string;
+  seconds?: number;
+}
+
+export interface ScenarioIn {
+  id: string;
+  label: string;
+  library?: string;
+  addendum?: string;
+}
+
 export interface SecondarySettings {
   draft?: "claude" | "codex" | "gemini";
   critique?: "claude" | "codex" | "gemini";
@@ -1155,6 +1220,7 @@ export interface SettingsIn {
   reference_max_searches?: number | null;
   check_reference_links?: boolean | null;
   image_quality?: "lean" | "max" | null;
+  allow_code_execution?: boolean | null;
 }
 
 export interface SettingsOut {
@@ -1169,6 +1235,7 @@ export interface SettingsOut {
   reference_max_searches: number;
   check_reference_links: boolean;
   image_quality: "lean" | "max";
+  allow_code_execution: boolean;
   image_tool_label: string;
   data_dir: string;
   seed_samples_dir: string;

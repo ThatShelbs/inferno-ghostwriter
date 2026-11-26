@@ -16,12 +16,14 @@ from inferno_ghostwriter.api.schemas import (
     KitLibraryOut,
     KitLinkOut,
     KitOut,
+    KitPromptOut,
     KitPushIn,
     KitRepoOut,
 )
 from inferno_ghostwriter.db import Project
 from inferno_ghostwriter.kit import KIT_JOBS, LIBRARIES, LIBRARY_LABELS, add_link, build_kit, kit_fit, kit_folder, push_kit, render_kit
-from inferno_ghostwriter.kit.build import Repo, zip_kit
+from inferno_ghostwriter.kit.build import Repo, kit_prompts, zip_kit
+from inferno_ghostwriter.kit.design import KitDesign
 from inferno_ghostwriter.kit.github import SIGN_IN, repo_name
 from inferno_ghostwriter.services import Services
 from inferno_ghostwriter.storage import slugify
@@ -85,6 +87,10 @@ def get_kit(project_id: int, session: SessionDep, services: ServicesDep) -> KitO
         default_name=repo_name(kit.get("slug") or slugify(title or project.title or "post")),
         linked=bool(repo and repo.url in (project.markdown or "")),
         libraries=[KitLibraryOut(id=lib, label=LIBRARY_LABELS[lib]) for lib in LIBRARIES],
+        prompts=[
+            KitPromptOut(file=p.file, title=p.title, text=p.text)
+            for p in kit_prompts(project, KitDesign.model_validate(kit["design"]) if kit.get("design") else None)
+        ],
     )
 
 

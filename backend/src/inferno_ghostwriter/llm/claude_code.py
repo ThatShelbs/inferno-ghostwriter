@@ -238,8 +238,9 @@ class ClaudeCodeLLM:
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
         on_reset: OnReset | None = None,
+        model: str | None = None,
     ) -> str:
-        result = await self._call(task, system, prompt, effort, ["--tools", "", "--max-turns", "1"], on_delta)
+        result = await self._call(task, system, prompt, effort, ["--tools", "", "--max-turns", "1"], on_delta, model=model)
         _record(result, usage)
         return str(result.get("result") or "")
 

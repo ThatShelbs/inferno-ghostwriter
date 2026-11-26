@@ -21,6 +21,7 @@ from inferno_ghostwriter.llm.claude import ClaudeLLM
 from inferno_ghostwriter.llm.claude_code import ClaudeCodeLLM
 from inferno_ghostwriter.llm.router import RoutingLLM
 from inferno_ghostwriter.llm.secondary import SecondaryCLI
+from inferno_ghostwriter.sandbox import LocalSandbox, NoSandbox, Sandbox
 from inferno_ghostwriter.secrets import KeyringSecretStore, SecretStore
 from inferno_ghostwriter.storage import Storage
 from inferno_ghostwriter.writer.links import HttpLinkChecker, LinkChecker, NoLinkChecker
@@ -39,6 +40,7 @@ RUNTIME_SETTINGS = (
     "reference_max_searches",
     "check_reference_links",
     "image_quality",
+    "allow_code_execution",
 )
 
 
@@ -61,6 +63,8 @@ class Services:
     signals: SignalCollector
     # The author's own GitHub CLI for pushing hands-on kits; tests and demo mode have none (or a fake).
     github: GitHubCLI
+    # Runs the example code behind hands-on images; used only while ``settings.allow_code_execution`` is on.
+    sandbox: Sandbox
 
     @property
     def kit(self) -> KitContext:
@@ -93,6 +97,14 @@ def load_runtime_settings(engine: Engine, settings: Settings) -> None:
             settings.detector_models = ["light", "curvature", "classifier"]
 
 
+def _local_sandbox() -> Sandbox:
+    """Runs example code with uv; without uv there is nothing to run it with, so hands-on images explain that."""
+    from inferno_ghostwriter.authenticity.local_detector import find_uv
+
+    uv = find_uv()
+    return LocalSandbox(uv) if uv else NoSandbox(unavailable="Running example code needs uv, which was not found on this computer.")
+
+
 def build_services(
     settings: Settings,
     *,
@@ -104,11 +116,13 @@ def build_services(
     pages: PageReader | None = None,
     signals: SignalCollector | None = None,
     github: GitHubCLI | None = None,
+    sandbox: Sandbox | None = None,
 ) -> Services:
     # Only the real Claude finds real links worth checking; a stand-in LLM (tests, demo mode) never goes online.
     links = links or (HttpLinkChecker() if llm is None and not settings.demo else NoLinkChecker())
     pages = pages or (HttpPageReader() if llm is None and not settings.demo else NoPageReader())
     signals = signals or (HttpSignalCollector() if llm is None and not settings.demo else NoSignalCollector())
+    llm_is_stand_in = llm is not None
     github = github or (GitHubCLI.discover() if llm is None and not settings.demo else GitHubCLI(None))
     engine = make_engine(settings.db_path)
     load_runtime_settings(engine, settings)
@@ -134,7 +148,10 @@ def build_services(
         secondary=secondary,
         claude_ready=lambda: auth.status(settings.claude_connection).signed_in,
     )
-    images = ImageService(engine=engine, llm=llm, settings=settings, storage=storage)
+    sandbox = sandbox or (NoSandbox() if llm_is_stand_in or settings.demo else _local_sandbox())
+    images = ImageService(
+        engine=engine, llm=llm, settings=settings, storage=storage, sandbox=lambda: sandbox if settings.allow_code_execution else None
+    )
     jobs = JobManager(engine, inline=inline_jobs)
     return Services(
         settings=settings,
@@ -150,4 +167,5 @@ def build_services(
         pages=pages,
         signals=signals,
         github=github,
+        sandbox=sandbox,
     )

@@ -12,7 +12,7 @@ from sqlmodel import Session, col, select
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage, Sample, utcnow
 from inferno_ghostwriter.jobs import JobContext
-from inferno_ghostwriter.kit.build import Repo, chart_data, kit_files, other_images, write_kit
+from inferno_ghostwriter.kit.build import Repo, chart_data, kit_files, other_images, own_code, write_kit
 from inferno_ghostwriter.kit.design import KitDesign, design_kit
 from inferno_ghostwriter.kit.fit import article_type_of
 from inferno_ghostwriter.kit.github import GitHubCLI, GitHubError, repo_name
@@ -114,6 +114,8 @@ async def build_kit(
         await job.progress(0.1, "Designing the notebook, data and prompts")
     ready = [i for i in images if i.status == "ready"]
     charts = chart_data(ready)
+    # Charts the post's own code draws ship as that code, so the model is not asked to recreate them.
+    covered = [(c.slot_id, c.title) for c in own_code(project, ready) if c.slot_id]
     design, notes = await design_kit(
         llm=ctx.llm,
         settings=ctx.settings,
@@ -123,7 +125,8 @@ async def build_kit(
         library=library,
         note=note,
         charts=charts,
-        others=other_images(ready, charts),
+        others=other_images(ready, charts, {slot for slot, _ in covered}),
+        covered=covered,
     )
     title, _ = split_title(project.markdown)
     old = project.kit or {}

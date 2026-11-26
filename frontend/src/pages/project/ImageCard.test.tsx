@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ImageOut, ImageRoomOut } from '../../api/types.gen'
@@ -164,6 +165,59 @@ describe('ImageCard', () => {
     await userEvent.type(screen.getByLabelText(/Steer the next round/), 'more like the original')
     await userEvent.click(screen.getByRole('button', { name: 'Pitch new ideas' }))
     await waitFor(() => expect(sent('/api/images/7/redraw')).toMatchObject({ rethink: true, note: 'more like the original' }))
+  })
+})
+
+describe('hands-on data viz card', () => {
+  const handsOn = (extra: Partial<ImageOut> = {}) =>
+    meme({
+      id: 9,
+      kind: 'hands_on_viz',
+      slot_id: 'img2',
+      provider: 'hands-on-code',
+      room: null,
+      finalists: [],
+      remix_dimensions: [],
+      hands_on: { library: 'matplotlib', lines: 12, chars: 345, stale: false },
+      ...extra,
+    })
+  const renderCard = (image: ImageOut) =>
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={new QueryClient()}>
+          <ImageCard projectId={3} image={image} images={[image]} />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    )
+
+  it('offers only code tools and reports the size of the code', () => {
+    renderCard(handsOn())
+    expect(screen.getByLabelText('The code behind this picture')).toHaveTextContent('12 lines of Matplotlib, 345 characters')
+    for (const name of ['Rerun code', 'Edit code', 'Replace', 'Caption']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument()
+    }
+    for (const name of ['Ideas', 'Redraw', 'Remix', 'Words']) {
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+    }
+    expect(screen.queryByText(/code above changed/)).not.toBeInTheDocument()
+  })
+
+  it('warns when the code changed and reruns it', async () => {
+    const image = handsOn({ hands_on: { library: 'matplotlib', lines: 12, chars: 345, stale: true } })
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(async () => new Response(JSON.stringify({ id: 'job1', kind: 'redraw_image', status: 'running' })))
+    renderCard(image)
+    expect(screen.getByText('The code above changed since this picture was made')).toBeInTheDocument()
+    await userEvent.click(
+      within(screen.getByText('The code above changed since this picture was made').closest('div')!.parentElement!).getByRole('button', { name: 'Rerun code' }),
+    )
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === '/api/images/9/redraw')).toBe(true))
+  })
+
+  it('points to Settings when running code is off', () => {
+    renderCard(handsOn({ status: 'error', url: null, error: 'Running example code is off. Turn on “Run example code” in Settings to draw this chart.' }))
+    expect(screen.getByRole('link', { name: 'Open Settings' })).toHaveAttribute('href', '/settings')
   })
 })
 

@@ -18,6 +18,7 @@ from inferno_ghostwriter.api.schemas import (
     AddImageIn,
     BuildsOnIn,
     CopyHtmlOut,
+    ExperimentIn,
     GenerateIn,
     ImageEditIn,
     ImageFormatOut,
@@ -50,6 +51,8 @@ from inferno_ghostwriter.authenticity import analyze, author_profile
 from inferno_ghostwriter.config import ImageRoute
 from inferno_ghostwriter.db import Idea, Persona, PersonaEvolution, Project, ProjectImage, ProjectReference, Sample, utcnow
 from inferno_ghostwriter.evolution import change_stage, edit_rate, start_analysis
+from inferno_ghostwriter.experiments.models import Experiment, Scenario, default_scenarios
+from inferno_ghostwriter.experiments.service import rerun as rerun_experiment
 from inferno_ghostwriter.export import PLATFORMS, Platform, build_bundle, copy_html, linkedin_post
 from inferno_ghostwriter.images import ImageProviderError, raster, to_png
 from inferno_ghostwriter.images import remix as remixing
@@ -126,6 +129,7 @@ def project_out(session: Session, project: Project, services: Services) -> Proje
             project.prompt,
             default_revisions=services.settings.revision_passes,
             words_per_image=(profile.baseline_stylometrics or {}).get("words_per_image") if profile else None,
+            code_runs=services.settings.allow_code_execution,
         ).model_dump()
         if persona
         else {}
@@ -154,7 +158,7 @@ def project_out(session: Session, project: Project, services: Services) -> Proje
         evolutions=[evolution_out(e) for e in evolutions],
         revisions=revisions,
         resolved_dials=resolved,
-        images=[image_out(i) for i in project_images(session, project.id)],
+        images=[image_out(i, project.markdown) for i in project_images(session, project.id)],
         references=[reference_out(r, project.markdown) for r in project_references(session, project.id)],
         active_job_id=active[0].id if active else None,
         active_job_kind=active[0].kind if active else None,
@@ -164,6 +168,15 @@ def project_out(session: Session, project: Project, services: Services) -> Proje
 def _check_idle(services: Services, project_id: int) -> None:
     if services.jobs.active_for(project_id=project_id, kinds=TEXT_JOBS):
         raise HTTPException(409, "Claude is still working on this post. Wait for it to finish.")
+
+
+def _new_experiment(spec: ExperimentIn) -> Experiment:
+    """The experiment a new post starts with: the author's prompt and scenarios (the six defaults when none are given)."""
+    scenarios = [Scenario(**s.model_dump()) for s in spec.scenarios] if spec.scenarios is not None else default_scenarios()
+    ids = [s.id for s in scenarios]
+    if not scenarios or len(set(ids)) != len(ids):
+        raise HTTPException(422, "An experiment needs at least one scenario, and each needs its own id.")
+    return Experiment(prompt=spec.prompt.strip(), model=spec.model, scenarios=scenarios, run_code=spec.run_code)
 
 
 def _check_no_open_test(session: Session, project_id: int) -> None:
@@ -196,6 +209,7 @@ async def start_generation(services: Services, project_id: int) -> str:
             project_id=project_id,
             ctx=ctx,
             links=services.links,
+            sandbox=services.sandbox,
         ),
         project_id=project_id,
     )
@@ -268,8 +282,11 @@ async def create_project(body: ProjectCreate, session: SessionDep, services: Ser
     idea = session.get(Idea, body.idea_id) if body.idea_id is not None else None
     if body.idea_id is not None and idea is None:
         raise HTTPException(404, "That idea no longer exists.")
+    if body.experiment is not None and body.mode == "ab":
+        raise HTTPException(422, "A library experiment cannot also be an A/B test.")
     project = Project(
         persona_id=persona.id,
+        experiment=_new_experiment(body.experiment).model_dump() if body.experiment is not None else None,
         prompt=body.prompt.strip(),
         dials=body.dials.model_dump(exclude_none=True),
         title=(idea.title if idea else body.prompt.strip().splitlines()[0])[:80],
@@ -908,11 +925,51 @@ async def add_image(project_id: int, body: AddImageIn, session: SessionDep, serv
     return JobOut(**job.model_dump())
 
 
+async def _start_experiment_run(services: Services, session: Session, project_id: int, only: list[str] | None) -> JobOut:
+    project = project_or_404(session, project_id)
+    if not project.experiment:
+        raise HTTPException(409, "This post is not a library experiment.")
+    if not project.markdown:
+        raise HTTPException(409, "Generate the post before rerunning its experiment.")
+    if only and any(s not in {sc.get("id") for sc in project.experiment.get("scenarios", [])} for s in only):
+        raise HTTPException(404, "No such scenario.")
+    _check_no_open_test(session, project_id)
+    _writable_persona(session, project.persona_id)
+    _check_idle(services, project_id)
+    job = await services.jobs.start(
+        "run_experiment",
+        lambda ctx: rerun_experiment(
+            engine=services.engine,
+            llm=services.llm,
+            settings=services.settings,
+            images=services.images,
+            sandbox=services.sandbox,
+            project_id=project_id,
+            only=only,
+            reporter=ctx,
+        ),
+        project_id=project_id,
+    )
+    return JobOut(**job.model_dump())
+
+
+@router.post("/projects/{project_id}/experiment/rerun", response_model=JobOut, status_code=202)
+async def rerun_experiment_all(project_id: int, session: SessionDep, services: ServicesDep) -> JobOut:
+    """Ask the model again for every scenario of a library experiment, run the answers and swap them into the post."""
+    return await _start_experiment_run(services, session, project_id, None)
+
+
+@router.post("/projects/{project_id}/experiment/{scenario_id}/rerun", response_model=JobOut, status_code=202)
+async def rerun_experiment_scenario(project_id: int, scenario_id: str, session: SessionDep, services: ServicesDep) -> JobOut:
+    """The same for one scenario."""
+    return await _start_experiment_run(services, session, project_id, [scenario_id])
+
+
 @router.post("/images/{image_id}/edit", response_model=JobOut, status_code=202)
 async def edit_image(image_id: int, body: ImageEditIn, session: SessionDep, services: ServicesDep) -> JobOut:
     """Change one image as the author describes ("make the arrows orange"), keeping the rest of it."""
     image = image_or_404(session, image_id)
-    if image.provider in ("upload", "placeholder") or not image.spec:
+    if image.kind != "hands_on_viz" and (image.provider in ("upload", "placeholder") or not image.spec):
         raise HTTPException(422, "Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
     # Only GPT can change a painting, so a painting's edit ignores the model choice.
     model = "auto" if image.provider == raster.PROVIDER else body.model

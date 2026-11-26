@@ -19,4 +19,5 @@ export const KIND_LABEL: Record<string, string> = {
   icon: 'Icons',
   meme: 'Closing meme',
   screenshot: 'Screenshot',
+  hands_on_viz: 'Hands-on data viz',
 }

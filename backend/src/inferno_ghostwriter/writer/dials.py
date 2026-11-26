@@ -24,6 +24,7 @@ from inferno_ghostwriter.writer.formulas import (
 Education = Literal["beginner", "intermediate", "expert"]
 Platform = Literal["medium", "substack", "linkedin", "x", "gumroad", "markdown"]
 IncludeCode = Literal["auto", "yes", "no"]
+HandsOnCharts = Literal["auto", "lots", "few", "none"]
 ReferenceKind = Literal["source", "quote", "social_post", "resource", "related_article"]
 REFERENCE_KINDS: tuple[ReferenceKind, ...] = ("source", "quote", "social_post", "resource", "related_article")
 
@@ -202,6 +203,8 @@ class Dials(FormulaParts):
     audience: str | None = Field(None, max_length=200)
     platform: Platform | None = None
     include_code: IncludeCode | None = None
+    # Hands-on charts: images made by running the example code above them. "auto" decides from the article type.
+    hands_on_charts: HandsOnCharts | None = None
     revision_passes: int | None = Field(None, ge=0, le=2)
     # How the post opens (see images.opening.styles): a style id or "auto" (the panel picks), plus the author's own direction.
     opening_style: str | None = Field(None, max_length=40)
@@ -241,6 +244,9 @@ class ResolvedDials(BaseModel):
     platform_guide: str
     include_code: IncludeCode
     revision_passes: int
+    # Hands-on charts as the post will use them (lots | few | none; "auto" is already decided) and the dial as chosen.
+    hands_on_charts: str = "none"
+    hands_on_choice: str = "auto"
     # The opening image: the chosen style ("auto" = the panel picks), its label, the author's note, the styles that suit
     # this post best (shown as the hint) and every style the panel may consider on Auto.
     opening_style: str = AUTO
@@ -284,8 +290,40 @@ def style_guide(values: dict[str, int]) -> str:
     return "\n".join(f"- {label} {values[key]}/10: {_guide(guides, values[key])}" for key, (label, guides) in STYLE_DIALS.items())
 
 
-def resolve(dials: Dials, persona: Persona, prompt: str, *, default_revisions: int, words_per_image: float | None = None) -> ResolvedDials:
-    """``words_per_image`` is the author's measured image cadence (the voice profile's baseline), for the automatic image count."""
+# Article types that are done alongside the reader (hands-on charts run all through them), and the ones that only
+# sometimes show a chart-drawing example, when the subject is data work.
+HANDS_ON_TYPES = frozenset({"how_to", "tutorial", "hands_on"})
+SOMETIMES_HANDS_ON_TYPES = frozenset({"case_study", "tool_review", "comparison", "explainer"})
+HANDS_ON_TOPICS = frozenset({"Data Visualization", "Data Science", "Python Programming"})
+
+
+def hands_on_level(choice: str, article_type: str, topic: str, *, code_runs: bool, include_code: str) -> str:
+    """``lots`` for how-to, tutorial and hands-on posts, ``few`` where it only sometimes fits, else ``none``.
+
+    Always ``none`` while the author has not allowed example code to run, or asked for no code."""
+    if not code_runs or include_code == "no" or choice == "none":
+        return "none"
+    if choice in ("lots", "few"):
+        return choice
+    if article_type in HANDS_ON_TYPES:
+        return "lots"
+    if article_type in SOMETIMES_HANDS_ON_TYPES and topic in HANDS_ON_TOPICS:
+        return "few"
+    return "none"
+
+
+def resolve(
+    dials: Dials,
+    persona: Persona,
+    prompt: str,
+    *,
+    default_revisions: int,
+    words_per_image: float | None = None,
+    code_runs: bool = False,
+) -> ResolvedDials:
+    """``words_per_image`` is the author's measured image cadence (the voice profile's baseline), for the automatic image count.
+
+    ``code_runs`` is whether the author allowed example code to run on this computer (hands-on charts need it)."""
     humor = dials.humor if dials.humor is not None else persona.default_humor
     education: Education = dials.education or persona.default_education  # type: ignore[assignment]
     if education not in EDUCATION_GUIDE:
@@ -307,6 +345,11 @@ def resolve(dials: Dials, persona: Persona, prompt: str, *, default_revisions: i
     detected = formula.article_type == AUTO and detect_article_type(prompt) != AUTO
     if detected:
         formula = formula.model_copy(update={"article_type": detect_article_type(prompt)})
+    topic = dials.topic or classify_topic(prompt)
+    hands_on_choice = dials.hands_on_charts or getattr(persona, "default_hands_on_charts", "auto") or "auto"
+    if hands_on_choice not in ("auto", "lots", "few", "none"):
+        hands_on_choice = "auto"
+    hands_on = hands_on_level(hands_on_choice, formula.article_type, topic, code_runs=code_runs, include_code=include_code)
     # The post's choice wins; an explicit "auto" on the post overrides the persona's default style.
     opening = clean_style(dials.opening_style if dials.opening_style else getattr(persona, "default_opening_style", AUTO))
     return ResolvedDials(
@@ -331,7 +374,9 @@ def resolve(dials: Dials, persona: Persona, prompt: str, *, default_revisions: i
         education_guide=EDUCATION_GUIDE[education],
         **styles,
         style_guide=style_guide(styles),
-        topic=dials.topic or classify_topic(prompt),
+        topic=topic,
+        hands_on_charts=hands_on,
+        hands_on_choice=hands_on_choice,
         audience=(dials.audience or "").strip(),
         platform=platform,
         platform_guide=PLATFORM_GUIDE[platform],

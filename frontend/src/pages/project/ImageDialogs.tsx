@@ -18,6 +18,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   'claude-art': 'Claude generative art',
   'claude-diagram': 'Claude diagram',
   'gpt-image': 'GPT image (ChatGPT)',
+  'hands-on-code': 'Code run on this computer',
+  montage: 'Side-by-side sheet',
   placeholder: 'Placeholder',
   upload: 'Your upload',
 }
@@ -41,8 +43,10 @@ export function EditDialog({
   const [model, setModel] = useState<ImageRoute>('auto')
   // Only GPT can change a painting, so a painting's edit offers no choice.
   const painted = image.provider === 'gpt-image'
+  // A hands-on picture is the output of the code above it, so editing it edits that code (and the post) and runs it again.
+  const code = image.kind === 'hands_on_viz'
   return (
-    <Dialog open onClose={onClose} title="Edit this image">
+    <Dialog open onClose={onClose} title={code ? 'Edit the code' : 'Edit this image'}>
       <form
         className="space-y-4"
         onSubmit={(e) => {
@@ -60,7 +64,11 @@ export function EditDialog({
       >
         <Field
           label="What should change?"
-          hint="Claude keeps the idea and layout and changes only what you describe. The current version stays in Versions."
+          hint={
+            code
+              ? 'Claude changes the code in your post as you describe, runs it again and keeps the new chart. The current picture stays in Versions and the old code in the post history.'
+              : 'Claude keeps the idea and layout and changes only what you describe. The current version stays in Versions.'
+          }
           htmlFor={`instruct-${image.id}`}
         >
           <Textarea
@@ -68,14 +76,14 @@ export function EditDialog({
             rows={3}
             value={instruction}
             autoFocus
-            placeholder="Make the arrows orange and label the y-axis in percent"
+            placeholder={code ? 'Sort the bars by total and label the axes in percent' : 'Make the arrows orange and label the y-axis in percent'}
             onChange={(e) => setInstruction(e.target.value)}
           />
         </Field>
-        {!painted && <ImageModelPicker id={`edit-model-${image.id}`} value={model} onChange={setModel} models={models} />}
+        {!painted && !code && <ImageModelPicker id={`edit-model-${image.id}`} value={model} onChange={setModel} models={models} />}
         {mutations.edit.error && <Notice tone="error">{errorText(mutations.edit.error)}</Notice>}
         <Button type="submit" icon={<Wand2 className="size-4" />} loading={mutations.edit.isPending} disabled={instruction.trim().length < 3}>
-          Edit image
+          {code ? 'Edit code' : 'Edit image'}
         </Button>
       </form>
     </Dialog>

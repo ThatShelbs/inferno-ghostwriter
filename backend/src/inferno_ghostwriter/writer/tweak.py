@@ -17,6 +17,8 @@ from sqlmodel import Session, col, select
 from inferno_ghostwriter.authenticity import analyze, author_profile
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage, Sample, utcnow
+from inferno_ghostwriter.experiments.compose import broken_by
+from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.images import ImageService
 from inferno_ghostwriter.jobs import JobContext
 from inferno_ghostwriter.llm import LLM
@@ -47,6 +49,7 @@ TEXT_JOBS = (
     "ab_decide",
     "add_image",
     "interview",
+    "run_experiment",
 )
 
 
@@ -77,6 +80,24 @@ def apply_edits(markdown: str, edits: list[TextEdit]) -> tuple[str, int, list[st
         markdown = markdown[:start] + edit.replace + markdown[end:]
         applied += 1
     return markdown, applied, skipped
+
+
+def _keep_experiment_intact(project: Project, edits: list[TextEdit]) -> tuple[list[TextEdit], list[str]]:
+    """In a library experiment the prompts and code are printed word for word: an edit that would change one is held back."""
+    experiment = load_experiment(project.experiment)
+    if experiment is None:
+        return edits, []
+    kept: list[TextEdit] = []
+    held: list[str] = []
+    current = project.markdown
+    for edit in edits:
+        trial, applied, _ = apply_edits(current, [edit])
+        if applied and broken_by(current, trial, experiment):
+            held.append(edit.find[:120])
+            continue
+        kept.append(edit)
+        current = trial
+    return kept, held
 
 
 def plan_slots(plan: dict[str, Any] | None) -> list[ImageSlot]:
@@ -138,7 +159,13 @@ async def tweak_post(
     if not project.markdown:
         raise WriterError("Generate the post before tweaking it.")
 
-    dials = resolve(Dials(**(project.dials or {})), persona, project.prompt, default_revisions=settings.revision_passes)
+    dials = resolve(
+        Dials(**(project.dials or {})),
+        persona,
+        project.prompt,
+        default_revisions=settings.revision_passes,
+        code_runs=settings.allow_code_execution,
+    )
     # Same system blocks as generation, so the voice profile and exemplars come from the prompt cache.
     system = writer_system(
         voice_profile.markdown,
@@ -165,7 +192,9 @@ async def tweak_post(
         usage=ctx.add_usage,
     )
 
-    markdown, applied, skipped = apply_edits(project.markdown, result.edits)
+    edits, held_back = _keep_experiment_intact(project, result.edits)
+    markdown, applied, skipped = apply_edits(project.markdown, edits)
+    skipped = [*skipped, *held_back]
     by_slot = {img.slot_id: img for img in image_rows}
     changes = [c for c in result.image_changes if c.slot_id in by_slot and c.brief.strip()]
     if not applied and not changes:

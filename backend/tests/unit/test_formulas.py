@@ -103,6 +103,7 @@ def test_formula_guide_names_every_chosen_part() -> None:
         "ai_tells": "",
         "callbacks": "",
         "missing_examples": "",
+        "verbatim_missing": "",
         "author_material": "",
         "anchors": "",
         "texture": "",
@@ -152,3 +153,44 @@ def test_the_closing_meme_is_told_the_shape_of_the_post() -> None:
     assert "should not echo the opening a second time" in circle and "The post opens on a joke." not in circle
 
     assert "Opener (the author's own instructions): Start at 3 a.m." in meme_note(ResolvedFormula(opener_note="Start at 3 a.m."))
+
+
+# -- hands-on charts: images made by running the example code above them ---------------------------------
+
+
+def _level(choice: str | None, article_type: str, topic: str = "", *, code_runs: bool = True, include_code: str = "auto") -> str:
+    from inferno_ghostwriter.writer.dials import hands_on_level
+
+    return hands_on_level(choice or "auto", article_type, topic, code_runs=code_runs, include_code=include_code)
+
+
+def test_hands_on_charts_follow_the_article_type() -> None:
+    for kind in ("how_to", "tutorial", "hands_on"):
+        assert _level("auto", kind) == "lots"
+    for kind in ("case_study", "tool_review", "comparison", "explainer"):
+        assert _level("auto", kind, "Data Visualization") == "few"
+        assert _level("auto", kind, "Machine Learning") == "none"  # not data work: no chart-drawing examples
+    for kind in ("opinion", "listicle", "deep_narrative", "lessons_learned", AUTO):
+        assert _level("auto", kind, "Data Visualization") == "none"
+
+
+def test_an_explicit_choice_wins_but_never_without_permission_or_with_no_code() -> None:
+    assert _level("lots", "opinion") == "lots" and _level("few", "tutorial") == "few" and _level("none", "tutorial") == "none"
+    assert _level("lots", "tutorial", code_runs=False) == "none"  # running code is off until the author allows it
+    assert _level("auto", "tutorial", include_code="no") == "none"
+
+
+def test_resolve_carries_the_hands_on_level_and_the_planner_is_told() -> None:
+    brief = "A step-by-step tutorial: how to build a stacked bar chart with matplotlib"
+    on = resolve(Dials(), Persona(name="Me"), brief, default_revisions=1, code_runs=True)
+    assert on.article_type == "tutorial" and on.hands_on_charts == "lots" and on.hands_on_choice == "auto"
+    assert "hands_on_viz" in prompt_settings(on)["hands_on_guide"] and "complete, runnable examples" in prompt_settings(on)["include_code"]
+
+    off = resolve(Dials(), Persona(name="Me"), brief, default_revisions=1)  # code_runs defaults to False
+    assert off.hands_on_charts == "none" and prompt_settings(off)["hands_on_guide"] == "Do not use the `hands_on_viz` kind."
+
+    pinned = resolve(Dials(hands_on_charts="few"), Persona(name="Me"), "My opinion on pie charts", default_revisions=1, code_runs=True)
+    assert pinned.hands_on_charts == "few" and pinned.hands_on_choice == "few"
+    persona = Persona(name="Me", default_hands_on_charts="none")
+    assert resolve(Dials(), persona, brief, default_revisions=1, code_runs=True).hands_on_charts == "none"
+    assert resolve(Dials(hands_on_charts="lots"), persona, brief, default_revisions=1, code_runs=True).hands_on_charts == "lots"

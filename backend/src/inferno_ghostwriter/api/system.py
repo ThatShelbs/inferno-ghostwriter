@@ -181,6 +181,7 @@ def _settings_out(services: ServicesDep) -> SettingsOut:
         reference_max_searches=s.reference_max_searches,
         check_reference_links=s.check_reference_links,
         image_quality=s.image_quality,
+        allow_code_execution=s.allow_code_execution,
         image_tool_label=f"{model_label(s.model)}: SVG illustrations, icons and diagrams; Vega-Lite charts",
         data_dir=str(s.data_dir),
         seed_samples_dir=str(s.seed_samples_dir),

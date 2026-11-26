@@ -115,16 +115,17 @@ class ClaudeLLM:
         on_delta: OnDelta | None = None,
         usage: UsageSink | None = None,
         on_reset: OnReset | None = None,
+        model: str | None = None,
     ) -> str:
         client = self._client_factory()
         streamed = False
 
-        async with self._warm(system) as warm:
+        async with self._warm(system, model) as warm:
 
             async def attempt() -> Any:
                 nonlocal streamed
                 async with client.beta.messages.stream(
-                    **self._common(system, effort, max_tokens),
+                    **self._common(system, effort, max_tokens, model),
                     messages=[{"role": "user", "content": prompt}],
                 ) as stream:
                     # Raw events (not text_stream) so the first one, before any thinking, releases waiting twins.

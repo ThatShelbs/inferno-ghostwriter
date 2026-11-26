@@ -30,9 +30,10 @@ Sound human, because the author is human. Write each part in the same hand as th
 Format (Markdown):
 - First line `# <title>`, then the subtitle in italics on its own line.
 - Section headings with `##` (and `###` only if the author uses subsections).
-- Code and LLM prompts in fenced blocks with a language tag.
+- Code and LLM prompts in fenced blocks with a language tag. A fenced block or long quoted block in the brief (a prompt, a script, an output) goes into the post character for character, in a fenced block right after the sentence that introduces it: never shorten, paraphrase or "tidy" it.
 - Put each image placeholder on its own line exactly where the image belongs: $placeholders. The hero goes right after the subtitle. The meme goes at the very end of the post, after the final line of text.
 - Use only the placeholder ids listed above; never invent new ones. Every lead-in sentence that introduces something ("Here is the top of the file:") is followed right away by it: a placeholder for a visual or screen, or a fenced code block for code, prompts, file excerpts and terminal output (even if the author's own posts show those as screenshots).
+- Hands-on data viz: $hands_on_guide
 - Each placeholder line stands alone. Do not write captions, credits, photo or data sources, or italic caption lines before or after it (no "Photo by ...", "Image: ...", "Visualization: ...", "Source: ..."); every image gets its own caption and credit automatically.
 
 Return only the post.

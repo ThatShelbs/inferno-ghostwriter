@@ -6,6 +6,7 @@ from typing import Any
 
 from inferno_ghostwriter.api.schemas import (
     FinalistOut,
+    HandsOnOut,
     ImageFormatOut,
     ImageHistoryOut,
     ImageOut,
@@ -17,6 +18,7 @@ from inferno_ghostwriter.api.schemas import (
     WordSlotOut,
 )
 from inferno_ghostwriter.db import ProjectImage
+from inferno_ghostwriter.images import handson
 from inferno_ghostwriter.images.body import KIND_OPTIONS
 from inferno_ghostwriter.images.memes import FAMILIES, FORMATS, get_format, load_state
 from inferno_ghostwriter.images.memes.generate import panel_scores
@@ -34,6 +36,7 @@ KIND_LABELS = {
     "chart": "Chart",
     "screenshot": "Screenshot mock",
     "icon": "Icon",
+    "hands_on_viz": "Hands-on data viz",
 }
 KIND_USE = {
     "illustration": "An illustrated metaphor or scene for the idea.",
@@ -41,6 +44,7 @@ KIND_USE = {
     "chart": "A chart of the numbers (illustrative unless the post has them).",
     "screenshot": "A drawn mock of the screen the text describes.",
     "icon": "A crisp icon or row of icons.",
+    "hands_on_viz": "The chart the code right above it draws, made by running that code.",
 }
 
 
@@ -50,7 +54,8 @@ def image_url(image: ProjectImage) -> str | None:
     return f"/api/images/{image.id}/file?v={image.file_name}"
 
 
-def image_out(image: ProjectImage) -> ImageOut:
+def image_out(image: ProjectImage, markdown: str | None = None) -> ImageOut:
+    """``markdown`` (the post's text) lets a hands-on image say whether its code changed since the picture was made."""
     history = [
         ImageHistoryOut(
             index=i,
@@ -72,6 +77,20 @@ def image_out(image: ProjectImage) -> ImageOut:
         reference_url=f"/api/images/{image.id}/reference/file?v={image.reference}" if image.reference else None,
         remix=remix_info(image),
         remix_dimensions=list(remix_dimensions(image)),
+        hands_on=hands_on_info(image, markdown),
+    )
+
+
+def hands_on_info(image: ProjectImage, markdown: str | None) -> HandsOnOut | None:
+    """What a code-made image knows about itself: the library, the size of its code and whether the code has changed since."""
+    if image.kind != "hands_on_viz" or image.provider != handson.PROVIDER:
+        return None
+    spec = handson.load_spec(image.spec)
+    return HandsOnOut(
+        library=str(spec.get("library") or ""),
+        lines=int(spec.get("lines") or 0),
+        chars=int(spec.get("chars") or 0),
+        stale=handson.is_stale(image.spec, markdown, image.slot_id) if markdown is not None else False,
     )
 
 
@@ -121,7 +140,7 @@ def room_info(image: ProjectImage) -> ImageRoomOut | None:
         return _opening_room(image, state)
     if image.kind == "meme" and (state := load_state(image.spec)) is not None:
         return _meme_room(state)
-    if image.kind not in ("hero", "meme") and image.provider not in ("upload", "placeholder", ""):
+    if image.kind not in ("hero", "meme", "hands_on_viz") and image.provider not in ("upload", "placeholder", ""):
         return _body_room(image)
     return None
 

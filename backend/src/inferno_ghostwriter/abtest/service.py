@@ -173,6 +173,7 @@ async def start_ab_test(services: Services, project_id: int) -> Job:
             host.prompt,
             default_revisions=services.settings.revision_passes,
             words_per_image=(voice_profile.baseline_stylometrics or {}).get("words_per_image"),
+            code_runs=services.settings.allow_code_execution,
         )
         chooser = random.SystemRandom()
         seed = chooser.randrange(2**31)

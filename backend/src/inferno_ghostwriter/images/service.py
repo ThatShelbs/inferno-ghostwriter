@@ -2,7 +2,8 @@
 
 Every image goes through a room with the same flow (pitch, draw candidates, judge, refine, keep finalists):
 ``OpeningRoom`` for the opening image, ``MemeMaker`` for the closing meme and ``BodyRoom`` for in-body images. All are
-rendered locally; no model-generated code runs.
+rendered locally. Model-generated code runs only for ``hands_on_viz`` images (``handson.py``), and only when the author
+turned "Run example code" on.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import logging
 import random
 import re
 import traceback
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -24,10 +26,15 @@ from sqlmodel import Session, col, select
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.db import Persona, Project, ProjectImage
-from inferno_ghostwriter.images import raster
+from inferno_ghostwriter.experiments.models import MONTAGE_SLOT, Scenario
+from inferno_ghostwriter.experiments.models import load as load_experiment
+from inferno_ghostwriter.experiments.models import measure as measure_code
+from inferno_ghostwriter.images import handson, raster
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, thumbnail_png
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
+from inferno_ghostwriter.images.codeblocks import code_before, replace_code
+from inferno_ghostwriter.images.handson import HandsOn
 from inferno_ghostwriter.images.memes import (
     ArtDirection,
     MemeContext,
@@ -37,6 +44,7 @@ from inferno_ghostwriter.images.memes import (
     plan_callbacks,
     voice_section,
 )
+from inferno_ghostwriter.images.montage import HEIGHT, MIN_TILES, WIDTH, Tile, make_montage
 from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom, opening_meme_spec
 from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
 from inferno_ghostwriter.images.opening.styles import BY_ID as OPENING_STYLES
@@ -48,6 +56,7 @@ from inferno_ghostwriter.llm.base import UsageSink
 from inferno_ghostwriter.llm.router import lead_provider
 from inferno_ghostwriter.llm.secondary import LABELS, MODEL_IDS
 from inferno_ghostwriter.prompts import render
+from inferno_ghostwriter.sandbox import Sandbox
 from inferno_ghostwriter.storage import Storage
 
 log = logging.getLogger(__name__)
@@ -95,6 +104,8 @@ def tool_label(provider: str, model: str) -> str:
         "claude-art": f"{claude} (generative art)",
         "claude-diagram": f"{claude} (diagram)",
         raster.PROVIDER: raster.TOOL_LABEL,
+        handson.PROVIDER: f"{claude} ({handson.TOOL_LABEL})",
+        handson.MONTAGE_PROVIDER: "Inferno Ghostwriter",
         "placeholder": "Inferno Ghostwriter",
     }.get(provider, provider)
 
@@ -180,6 +191,8 @@ def meme_spec(image: ProjectImage) -> str:
 
 def remix_dimensions(image: ProjectImage) -> tuple[str, ...]:
     """What a redraw of this image may vary (colors, cast, staging, medium): it depends on the kind and opening style."""
+    if image.kind == "hands_on_viz":
+        return ()  # the picture is the code's output: nothing to restyle at random
     if is_meme(image):
         return remixing.KIND_DIMENSIONS["meme"]
     style = str((load_opening_state(image.spec) or {}).get("style") or "") if image.kind == "hero" else ""
@@ -187,7 +200,9 @@ def remix_dimensions(image: ProjectImage) -> tuple[str, ...]:
 
 
 class ImageService:
-    def __init__(self, *, engine: Engine, llm: LLM, settings: Settings, storage: Storage) -> None:
+    def __init__(
+        self, *, engine: Engine, llm: LLM, settings: Settings, storage: Storage, sandbox: Callable[[], Sandbox | None] | None = None
+    ) -> None:
         self.engine = engine
         self.llm = llm
         self.settings = settings
@@ -195,6 +210,8 @@ class ImageService:
         self.memes = MemeMaker(llm, settings)
         self.opening = OpeningRoom(llm, settings, self.memes)
         self.body = BodyRoom(llm, settings)
+        # Runs the code above a hands-on image; None (or a sandbox that is off) means those images explain how to turn it on.
+        self.handson = HandsOn(llm, settings, sandbox or (lambda: None))
 
     async def create(
         self,
@@ -234,7 +251,12 @@ class ImageService:
             makers[provider] = MODEL_IDS.get(lead, self.settings.model)  # type: ignore[call-overload]
         _makers.set(makers)
         try:
-            if instruction.strip():
+            if image.kind == "hands_on_viz":
+                # No pitches or judging: the picture is whatever the code above it draws.
+                updates = await self._hands_on(image, persona=persona, markdown=markdown, instruction=instruction, usage=usage)
+                if instruction.strip():
+                    updates["edits"] = [*(image.edits or []), instruction.strip()][-MAX_EDIT_NOTES:]
+            elif instruction.strip():
                 updates = await self._edit(image, persona=persona, instruction=instruction, brand_kit=brand_kit, usage=usage)
                 updates["edits"] = [*(image.edits or []), instruction.strip()][-MAX_EDIT_NOTES:]
             else:
@@ -267,7 +289,137 @@ class ImageService:
             tb = traceback.extract_tb(exc.__traceback__)
             where = f" at {Path(tb[-1].filename).name}:{tb[-1].lineno}" if tb else ""
             updates = {"status": "error", "error": f"Could not create this image ({exc!r}{where}). Click Redraw to try again."}
-        return self._save(image_id, updates)
+        saved = self._save(image_id, updates)
+        if (
+            saved.kind == "hands_on_viz"
+            and saved.status == "ready"
+            and saved.slot_id != MONTAGE_SLOT
+            and saved.provider == handson.PROVIDER
+        ):
+            self._refresh_montage(saved.project_id, persona)
+        return saved
+
+    async def _hands_on(
+        self, image: ProjectImage, *, persona: Persona, markdown: str, instruction: str, usage: UsageSink | None
+    ) -> dict[str, Any]:
+        """Run the code above the image (after changing it as the author asked) and keep the chart it draws."""
+        if image.provider == handson.MONTAGE_PROVIDER or image.slot_id == MONTAGE_SLOT:
+            return self._result(image, self._montage(image), persona)
+        # The post as it is now (the caller's copy may predate another image's fix or the author's own edit of the code).
+        with Session(self.engine) as session:
+            project = session.get(Project, image.project_id)
+        current = project.markdown if project is not None and project.markdown else markdown
+        result = await self.handson.make(
+            slot_id=image.slot_id, markdown=current, purpose=image.purpose or image.prompt, instruction=instruction, usage=usage
+        )
+        if result.changed:
+            # The post must show the code that made the picture: its block is replaced, with an undo point.
+            self._save_code(image.project_id, image.slot_id, result.code, f"Example code for {image.slot_id}: {result.note or 'fixed'}")
+        self._sync_scenario(image.project_id, image.slot_id, result.code)
+        updates = self._result(image, result.drawn, persona)
+        updates["edits"] = list(image.edits or []) if instruction.strip() else []
+        return updates
+
+    def _montage(self, image: ProjectImage) -> Drawn:
+        """Every chart of the experiment on one labeled sheet, drawn by code from the charts as they are now."""
+        with Session(self.engine) as session:
+            project = session.get(Project, image.project_id)
+            rows = {r.slot_id: r for r in session.exec(select(ProjectImage).where(col(ProjectImage.project_id) == image.project_id))}
+        experiment = load_experiment(project.experiment) if project is not None else None
+        if experiment is None:
+            raise ImageProviderError("This image belongs to an experiment, and this post has none.")
+        tiles = []
+        for scenario in experiment.scenarios:
+            row = rows.get(scenario.slot_id) if scenario.slot_id else None
+            path = self.storage.image_dir(image.project_id) / row.file_name if row is not None and row.file_name else None
+            if row is not None and row.status == "ready" and path is not None and path.exists():
+                tiles.append(Tile(scenario.label, f"{scenario.lines:,} lines \u00b7 {scenario.chars:,} characters", path.read_bytes()))
+        if len(tiles) < MIN_TILES:
+            raise ImageProviderError("The side-by-side image needs at least two charts from the experiment.")
+        png = make_montage(tiles, f"One prompt, {len(tiles)} ways", self._post_scheme(image.project_id, ()))
+        spec = json.dumps({"slots": [s.slot_id for s in experiment.scenarios if s.slot_id]}, separators=(",", ":"))
+        return Drawn(
+            png, WIDTH, HEIGHT, handson.MONTAGE_PROVIDER, spec,
+            alt=f"The charts from {len(tiles)} libraries side by side",
+            caption=f"The same prompt answered with {len(tiles)} different libraries, side by side",
+        )  # fmt: skip
+
+    def _sync_scenario(self, project_id: int, slot_id: str, code: str) -> None:
+        """Keep the experiment's record of a scenario in step with the code that now draws its chart."""
+        with Session(self.engine) as session:
+            project = session.get(Project, project_id)
+            experiment = load_experiment(project.experiment) if project is not None else None
+            scenario = next((s for s in experiment.scenarios if s.slot_id == slot_id), None) if experiment is not None else None
+            if project is None or experiment is None or scenario is None or scenario.code.strip() == code.strip():
+                return
+            lines, chars = measure_code(code)
+            scenarios = [
+                s.model_copy(update={"code": code, "lines": lines, "chars": chars}) if s is scenario else s for s in experiment.scenarios
+            ]
+            project.experiment = experiment.model_copy(update={"scenarios": scenarios}).model_dump()
+            session.add(project)
+            session.commit()
+
+    def _refresh_montage(self, project_id: int, persona: Persona) -> None:
+        """A chart changed: the side-by-side image is drawn again from the charts as they are now (never fails the chart)."""
+        with Session(self.engine) as session:
+            montage = session.exec(
+                select(ProjectImage).where(col(ProjectImage.project_id) == project_id, col(ProjectImage.slot_id) == MONTAGE_SLOT)
+            ).first()
+        if montage is None or montage.id is None:
+            return
+        try:
+            self._save(montage.id, {**self._result(montage, self._montage(montage), persona), "status": "ready", "error": None})
+        except ImageProviderError as exc:
+            log.info("Side-by-side image not refreshed: %s", exc)
+
+    def save_experiment_image(self, image_id: int, png: bytes, scenario: Scenario, persona: Persona, model: str) -> ProjectImage:
+        """Store the chart a scenario's code really drew: the same record a hands-on image makes, so Rerun and Edit code just work."""
+        image = self._get(image_id)
+        png, width, height = handson.png_size(png)
+        library = handson.library_of(scenario.code)
+        spec = json.dumps(
+            {
+                "code_hash": handson.code_hash(scenario.code),
+                "library": library,
+                "lines": scenario.lines,
+                "chars": scenario.chars,
+                "versions": {},
+            },
+            separators=(",", ":"),
+        )
+        return self._save(
+            image_id,
+            {
+                "file_name": self._write(image.project_id, image.slot_id, png),
+                "provider": handson.PROVIDER,
+                "spec": spec,
+                "alt": image.purpose or f"The chart the {scenario.label} code draws",
+                "caption": handson.caption_for(library, scenario.lines, scenario.chars),
+                "credit": credit_line(persona, handson.PROVIDER, model),
+                "width": width,
+                "height": height,
+                "seed": None,
+                "edits": [],
+                "status": "ready",
+                "error": None,
+            },
+        )
+
+    def _save_code(self, project_id: int, slot_id: str, code: str, label: str) -> None:
+        """Swap the code block above ``slot_id`` for ``code`` in the post as it is now (other images may be fixing theirs too)."""
+        from inferno_ghostwriter.writer.revisions import push_revision  # the writer package imports this one
+
+        with Session(self.engine) as session:
+            project = session.get(Project, project_id)
+            block = code_before(project.markdown, slot_id) if project is not None else None
+            if project is None or block is None or block.code.strip() == code.strip():
+                return
+            push_revision(project, label, "image")
+            project.markdown = replace_code(project.markdown, block, code)
+            project.updated_at = datetime.now(UTC)
+            session.add(project)
+            session.commit()
 
     def fail_pending(self, project_id: int | None = None, reason: str = STALE_PENDING) -> int:
         """Mark images still waiting to be drawn as errors (their job is gone); returns how many."""

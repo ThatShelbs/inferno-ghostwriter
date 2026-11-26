@@ -92,6 +92,16 @@ function AdvancedCard() {
       </Field>
       <div className="flex items-center justify-between gap-4">
         <div>
+          <p className="font-semibold">Run example code</p>
+          <p className="text-sm text-muted">
+            Lets hands-on data viz images draw the chart by running the Python example above them, so the picture always matches the code. The code is checked
+            first and runs in an empty scratch folder with no keys or passwords, but it is real code running on this computer. Off by default.
+          </p>
+        </div>
+        <Switch checked={settings.allow_code_execution} label="Run example code" onChange={(value) => update.mutate({ allow_code_execution: value })} />
+      </div>
+      <div className="flex items-center justify-between gap-4">
+        <div>
           <p className="font-semibold">Refusal fallback</p>
           <p className="text-sm text-muted">
             If Claude&apos;s safety filters wrongly decline a request, retry it on Anthropic&apos;s recommended fallback model.

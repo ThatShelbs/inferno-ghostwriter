@@ -18,6 +18,8 @@ export const TOPICS = [
 export type Education = 'beginner' | 'intermediate' | 'expert'
 export type Platform = 'medium' | 'substack' | 'linkedin' | 'x' | 'gumroad' | 'markdown'
 export type IncludeCode = 'auto' | 'yes' | 'no'
+/** Hands-on charts: images made by running the example code above them ('auto' decides from the article type). */
+export type HandsOnCharts = 'auto' | 'lots' | 'few' | 'none'
 
 export const PLATFORMS: [Platform, string][] = [
   ['medium', 'Medium'],
@@ -67,6 +69,8 @@ export interface DialsState {
   /** null = use the persona's default */
   platform: Platform | null
   includeCode: IncludeCode | null
+  /** null = use the persona's default */
+  handsOnCharts: HandsOnCharts | null
   /** null = use the persona's default; 'auto' = the panel picks across the styles that suit the post */
   openingStyle: string | null
   /** The author's own direction for the opening image; empty = none */
@@ -86,6 +90,7 @@ export const emptyDials: DialsState = {
   audience: '',
   platform: null,
   includeCode: null,
+  handsOnCharts: null,
   openingStyle: null,
   openingNote: '',
 }
@@ -107,6 +112,7 @@ export function buildDials(state: DialsState): Dials {
   if (state.audience.trim()) dials.audience = state.audience.trim()
   if (state.platform !== null) dials.platform = state.platform
   if (state.includeCode !== null) dials.include_code = state.includeCode
+  if (state.handsOnCharts !== null) dials.hands_on_charts = state.handsOnCharts
   if (state.openingStyle !== null) dials.opening_style = state.openingStyle
   if (state.openingNote.trim()) dials.opening_note = state.openingNote.trim()
   return { ...dials, ...buildFormula(state.formula) }
@@ -133,6 +139,7 @@ export function dialsToState(dials: Dials | Record<string, unknown> | null | und
     audience: d.audience ?? '',
     platform: d.platform ?? null,
     includeCode: d.include_code ?? null,
+    handsOnCharts: d.hands_on_charts ?? null,
     openingStyle: d.opening_style ?? null,
     openingNote: d.opening_note ?? '',
   }
@@ -157,6 +164,7 @@ export function shownDials(dials: DialsState, persona: PersonaOut | undefined) {
     humor: dials.humor ?? persona?.default_humor ?? 5,
     education: dials.education ?? (persona?.default_education as Education | undefined) ?? 'intermediate',
     includeCode: dials.includeCode ?? (persona?.default_include_code as IncludeCode | undefined) ?? 'auto',
+    handsOnCharts: dials.handsOnCharts ?? (persona?.default_hands_on_charts as HandsOnCharts | undefined) ?? 'auto',
     openingStyle: dials.openingStyle ?? persona?.default_opening_style ?? 'auto',
   }
 }

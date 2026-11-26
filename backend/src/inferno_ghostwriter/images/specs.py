@@ -21,3 +21,10 @@ class ChartSpec(BaseModel):
     alt: str
     caption: str
     data_is_illustrative: bool = Field(description="True when the values are illustrative rather than real data.")
+
+
+class HandsOnFix(BaseModel):
+    """A corrected version of a post's example code (it failed to run, or the author asked for a change)."""
+
+    code: str = Field(description="The complete corrected Python script: the whole block, not a diff. No Markdown fences.")
+    what_changed: str = Field(description="One plain sentence on what you changed and why.")
