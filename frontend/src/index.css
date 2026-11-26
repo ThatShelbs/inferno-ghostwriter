@@ -125,6 +125,8 @@ body {
   font-size: 1.125rem;
   line-height: 1.75;
   color: var(--app-fg);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .article h1,
 .article h2,
@@ -192,6 +194,9 @@ body {
   color: inherit;
 }
 .article table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
   border-collapse: collapse;
   font-family: var(--font-sans);
   font-size: 0.95rem;

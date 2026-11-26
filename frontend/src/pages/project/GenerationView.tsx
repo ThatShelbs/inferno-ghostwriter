@@ -18,8 +18,8 @@ export function GenerationView({ job }: { job: JobState }) {
   const active = STEPS.findIndex((s) => job.progress < s.until)
   const critique = job.critique
   return (
-    <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
-      <Card padded={false} className="p-6 sm:p-10" aria-live="polite" aria-busy="true">
+    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <Card padded={false} className="min-w-0 p-6 sm:p-10" aria-live="polite" aria-busy="true">
         {job.draft ? (
           <Article
             markdown={job.draft}
