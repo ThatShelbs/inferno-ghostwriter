@@ -55,11 +55,12 @@ def test_charts_reject_remote_data() -> None:
 
 def test_credit_line_uses_persona_template() -> None:
     persona = Persona(name="Shelby", display_name="Shelby Temple")
-    assert credit_line(persona, "claude-svg") == "Author: Shelby Temple; Made with Claude Opus 5.5 (SVG)"
-    assert credit_line(persona, "claude-svg", "claude-sonnet-5-5") == "Author: Shelby Temple; Made with Claude Sonnet 5.5 (SVG)"
+    assert credit_line(persona, "claude-svg") == "Author: Shelby Temple; Made with Claude Opus 5.5"
+    assert credit_line(persona, "claude-svg", "claude-sonnet-5-5") == "Author: Shelby Temple; Made with Claude Sonnet 5.5"
     assert credit_line(persona, "upload") == "Image by Shelby Temple"
     persona.credit_template = "Image: {name} ({tool})"
-    assert credit_line(persona, "vega-lite") == "Image: Shelby Temple (Claude Opus 5.5 + Vega-Lite)"
+    assert credit_line(persona, "vega-lite") == "Image: Shelby Temple (Claude Opus 5.5)"
+    assert credit_line(persona, "hands-on-code") == "Image: Shelby Temple (Claude Opus 5.5)"
     persona.credit_template = "{oops}"
     assert credit_line(persona, "vega-lite").startswith("Author: Shelby Temple")
 
