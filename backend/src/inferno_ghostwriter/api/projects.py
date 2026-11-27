@@ -602,6 +602,9 @@ async def _image_job(
     tweaks: dict[str, str] | None = None,
     improve: bool = True,
     model: ImageRoute = "auto",
+    pitch: bool = False,
+    concept_edit: dict[str, Any] | None = None,
+    remix: bool = True,
 ) -> JobOut:
     image = image_or_404(session, image_id)
     if model in ("codex", "gemini"):
@@ -616,10 +619,20 @@ async def _image_job(
     brand_kit = dict(project.brand_kit or {})
     voice_profile = current_voice_profile(session, project.persona_id)
     markdown, title, voice = project.markdown, project.title, voice_profile.markdown if voice_profile else ""
-    before = describe_image(image)
+    before, before_core, before_caption = describe_image(image), describe_image(image, substance=True), image.caption
+    if instruction:
+        step = "Editing image"
+    elif concept is not None:
+        step = "Drawing that idea"
+    elif pitch or (rethink and note):
+        step = "Pitching new ideas"
+    elif rethink:
+        step = "Drawing the next idea"
+    else:
+        step = "Redrawing image"
 
     async def run(ctx):  # type: ignore[no-untyped-def]
-        await ctx.progress(0.1, "Editing image" if instruction else "Redrawing image")
+        await ctx.progress(0.1, step)
         with image_model(model):
             result = await services.images.create(
                 image_id,
@@ -636,15 +649,30 @@ async def _image_job(
                 note=note,
                 tweaks=tweaks,
                 improve=improve,
+                remix=remix,
+                pitch=pitch,
+                concept_edit=concept_edit,
                 usage=ctx.add_usage,
             )
         if result.status == "error":
             raise ImageProviderError(result.error or "Image generation failed.")
+        # The text around the image is checked only when what the image is changed (another idea, format or words),
+        # or an edit changed its caption: a plain redraw of the same idea rewords its alt text, which the post never quotes.
+        changed = (
+            describe_image(result, substance=True) != before_core
+            or format is not None
+            or (bool(instruction) and result.caption != before_caption)
+        )
+        synced = (
+            await _sync_text(services, image.project_id, [(result.slot_id, before, describe_image(result))], ctx)
+            if changed
+            else {"text_edits": 0, "text_summary": ""}
+        )
         return {
             "image_id": image_id,
             # Images that extend this one were drawn from its old version; the card offers to match them.
             "dependents": dependent_slots(services, image.project_id, image.slot_id),
-            **await _sync_text(services, image.project_id, [(result.slot_id, before, describe_image(result))], ctx),
+            **synced,
         }
 
     job = await services.jobs.start("edit_image" if instruction else "redraw_image", run, project_id=project.id)
@@ -667,8 +695,12 @@ async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, servi
         allowed = {f.id for f in image_formats(room.room if room else _room_kind(image), image.kind)}
         if body.format not in allowed:
             raise HTTPException(422, f"This image cannot be drawn as {body.format!r}.")
-    if body.concept is not None and (room is None or body.concept not in {p.index for p in room.pitches}):
-        raise HTTPException(422, "This image has no such idea.")
+    if body.concept is not None:
+        shown = {p.index: p for p in room.pitches} if room else {}
+        if body.concept not in shown:
+            raise HTTPException(422, "This image has no such idea.")
+        if body.pitch_hook is not None and body.pitch_hook.strip() != shown[body.concept].hook.strip():
+            raise HTTPException(409, "The ideas for this image changed since you opened them. Open Ideas again to see the current ones.")
     return await _image_job(
         services,
         session,
@@ -680,6 +712,8 @@ async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, servi
         tweaks=body.tweaks,
         improve=body.improve,
         model=body.model,
+        pitch=body.pitch,
+        concept_edit=body.concept_edit.model_dump() if body.concept_edit and body.concept is not None else None,
     )
 
 
@@ -737,12 +771,13 @@ async def build_on(image_id: int, body: BuildsOnIn, session: SessionDep, service
         raise HTTPException(422, "An image can only build on one that comes earlier in the post.")
     if base.kind in ("meme", "hero") or image.kind in ("meme", "hero"):
         raise HTTPException(422, "The opening image and the closing meme stand on their own.")
-    if not base.spec or base.provider in ("upload", "placeholder"):
-        raise HTTPException(422, "That image has no source to build on (it is an upload or a placeholder). Redraw it first.")
+    if base.provider == "placeholder" or not base.file_name or (not base.spec and base.provider != "upload"):
+        raise HTTPException(422, "That image has nothing to build on yet. Redraw or upload it first.")
     image.builds_on = base.slot_id
     session.add(image)
     session.commit()
-    return await _image_job(services, session, image_id, improve=False)
+    # Drawn from the base's data and look, with no random twist (it would fight "same colors as the base").
+    return await _image_job(services, session, image_id, improve=False, remix=False)
 
 
 @router.delete("/images/{image_id}/build-on", response_model=ImageOut)
@@ -970,8 +1005,9 @@ async def rerun_experiment_scenario(project_id: int, scenario_id: str, session: 
 async def edit_image(image_id: int, body: ImageEditIn, session: SessionDep, services: ServicesDep) -> JobOut:
     """Change one image as the author describes ("make the arrows orange"), keeping the rest of it."""
     image = image_or_404(session, image_id)
-    if image.kind != "hands_on_viz" and (image.provider in ("upload", "placeholder") or not image.spec):
-        raise HTTPException(422, "Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
+    # An upload is edited from its picture (it is recreated with the change), so every image but a placeholder can be.
+    if image.kind != "hands_on_viz" and (image.provider == "placeholder" or (not image.spec and image.provider != "upload")):
+        raise HTTPException(422, "This image has nothing to edit yet. Redraw or upload it first.")
     # Only GPT can change a painting, so a painting's edit ignores the model choice.
     model = "auto" if image.provider == raster.PROVIDER else body.model
     return await _image_job(services, session, image_id, instruction=body.instruction, model=model)

@@ -1,4 +1,4 @@
-import { Wand2 } from 'lucide-react'
+import { Layers, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { errorText } from '../../api/client'
@@ -67,7 +67,9 @@ export function EditDialog({
           hint={
             code
               ? 'Claude changes the code in your post as you describe, runs it again and keeps the new chart. The current picture stays in Versions and the old code in the post history.'
-              : 'Claude keeps the idea and layout and changes only what you describe. The current version stays in Versions.'
+              : image.provider === 'upload'
+                ? 'Your picture is recreated with this change (same content, words and layout). From then on it edits, redraws and builds on like any image. The original stays in Versions.'
+                : 'Claude keeps the idea and layout and changes only what you describe. The current version stays in Versions.'
           }
           htmlFor={`instruct-${image.id}`}
         >
@@ -125,12 +127,15 @@ export function CaptionDialog({ image, mutations, onClose }: { image: ImageOut; 
 export function VersionsDialog({ image, mutations, onClose }: { image: ImageOut; mutations: Mutations; onClose: () => void }) {
   return (
     <Dialog open onClose={onClose} title="Image versions" wide>
+      <p className="mb-3 text-sm text-muted">Click a version to bring it back. Nothing is redrawn and nothing is lost.</p>
+      {mutations.revert.error && <Notice tone="error">{errorText(mutations.revert.error)}</Notice>}
       <div className="grid gap-4 sm:grid-cols-2">
         {image.history.map((entry) => (
           <button
             key={entry.index}
             type="button"
-            className="rounded-xl border border-line p-2 text-left hover:border-accent"
+            disabled={mutations.revert.isPending}
+            className="rounded-xl border border-line p-2 text-left hover:border-accent disabled:opacity-60"
             onClick={() => mutations.revert.mutate({ id: image.id, index: entry.index }, { onSuccess: onClose })}
           >
             <img src={entry.url} alt={`Version ${entry.index + 1}`} className="w-full rounded-lg" />
@@ -161,32 +166,33 @@ export function BuildOnDialog({
   onClose: () => void
   onJob: (id: string) => void
 }) {
+  const [choice, setChoice] = useState(image.builds_on ?? '')
+  const pending = mutations.buildOn.isPending || mutations.clearBuildOn.isPending
+  const error = mutations.buildOn.error ?? mutations.clearBuildOn.error
   return (
     <Dialog open onClose={onClose} title="Build on an earlier image">
-      <div className="space-y-4">
+      <form
+        className="space-y-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!choice) return mutations.clearBuildOn.mutate(image.id, { onSuccess: onClose })
+          mutations.buildOn.mutate(
+            { id: image.id, slotId: choice },
+            {
+              onSuccess: (j) => {
+                onJob(j.id)
+                onClose()
+              },
+            },
+          )
+        }}
+      >
         <p className="text-sm text-muted">
           When two images tell one story (a chart, then the same chart split into groups), draw the second from the first: it reuses the same data, colors and
-          shapes and adds only what is new.
+          shapes and adds only what is new. Your own pictures can be built on too.
         </p>
         <Field label="This image builds on" htmlFor={`builds-on-${image.id}`}>
-          <Select
-            id={`builds-on-${image.id}`}
-            value={image.builds_on ?? ''}
-            disabled={mutations.buildOn.isPending || mutations.clearBuildOn.isPending}
-            onChange={(e) => {
-              const slotId = e.target.value
-              if (!slotId) return mutations.clearBuildOn.mutate(image.id, { onSuccess: onClose })
-              mutations.buildOn.mutate(
-                { id: image.id, slotId },
-                {
-                  onSuccess: (j) => {
-                    onJob(j.id)
-                    onClose()
-                  },
-                },
-              )
-            }}
-          >
+          <Select id={`builds-on-${image.id}`} value={choice} disabled={pending} onChange={(e) => setChoice(e.target.value)}>
             <option value="">Nothing (it stands alone)</option>
             {bases.map((other) => (
               <option key={other.id} value={other.slot_id}>
@@ -195,9 +201,14 @@ export function BuildOnDialog({
             ))}
           </Select>
         </Field>
-        <p className="text-xs text-muted">Choosing an image redraws this one from it right away. The current version stays in Versions.</p>
-        {mutations.buildOn.error && <Notice tone="error">{errorText(mutations.buildOn.error)}</Notice>}
-      </div>
+        <p className="text-xs text-muted">
+          {choice ? 'This image is drawn again from the one you chose. The current version stays in Versions.' : 'The image keeps its current picture.'}
+        </p>
+        {error && <Notice tone="error">{errorText(error)}</Notice>}
+        <Button type="submit" icon={<Layers className="size-4" />} loading={pending} disabled={choice === (image.builds_on ?? '')}>
+          {choice ? 'Draw it from that image' : 'Stand alone'}
+        </Button>
+      </form>
     </Dialog>
   )
 }

@@ -22,7 +22,7 @@ from inferno_ghostwriter.images.memes import get_format
 from inferno_ghostwriter.images.memes import load_state as load_meme_state
 from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
 from inferno_ghostwriter.images.opening.styles import get_style
-from inferno_ghostwriter.images.service import meme_spec
+from inferno_ghostwriter.images.service import meme_spec, shown_idea
 from inferno_ghostwriter.llm import LLM
 from inferno_ghostwriter.llm.base import UsageSink
 from inferno_ghostwriter.prompts import render
@@ -37,11 +37,23 @@ from inferno_ghostwriter.writer.tweak import apply_edits, finish_text
 log = logging.getLogger(__name__)
 
 
-def describe_image(image: ProjectImage) -> str:
-    """What an image is and shows, in words, so a change to it can be told to the editor. Empty for uploads and failures."""
+# How a body image is drawn, when its drawing says more than its slot's kind (a diagram redrawn as a chart).
+DRAWN_AS = {"vega-lite": "chart", "claude-diagram": "diagram"}
+
+
+def describe_image(image: ProjectImage, *, substance: bool = False) -> str:
+    """What an image is and shows, in words, so a change to it can be told to the editor. Empty for uploads and failures.
+
+    ``substance`` leaves out the alt text and caption (they are reworded on every redraw) and names the idea on show,
+    so comparing two descriptions says whether the text around the image may need to change at all."""
     if image.provider in ("upload", "placeholder") or image.status == "error":
         return ""
     lines = [f"{image.kind} image `{image.slot_id}`"]
+    if substance:
+        if drawn := DRAWN_AS.get(image.provider):
+            lines.append(f"Drawn as: {drawn}")
+        if image.kind not in ("hero", "meme") and (idea := shown_idea(image)):
+            lines.append(f"Idea: {idea}")
     if image.purpose:
         lines.append(f"Purpose: {image.purpose}")
     opening = load_opening_state(image.spec) if image.kind == "hero" else None
@@ -66,9 +78,9 @@ def describe_image(image: ProjectImage) -> str:
             words = " / ".join(str(t.get("text", "")) for t in pitch.get("texts") or [] if t.get("text"))
             if words:
                 lines.append(f"Words: {words}")
-    if image.alt:
+    if image.alt and not substance:
         lines.append(f"Alt text: {image.alt}")
-    if image.caption:
+    if image.caption and not substance:
         lines.append(f"Caption: {image.caption}")
     return "\n".join(lines)
 
@@ -160,7 +172,7 @@ async def sync_text_to_images(
         ),
         prompt=render("image_text_sync", changes=_describe_changes(changes), markdown=project.markdown),
         schema=ImageTextEdits,
-        effort=settings.effort_critique,
+        effort=settings.effort_image_text_sync,
         max_tokens=16000,
         usage=usage,
     )

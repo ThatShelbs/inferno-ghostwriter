@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images import raster
+from inferno_ghostwriter.images import board, raster
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.judge import Ranking, judge_sheet, rank_pitches, to_refine
 from inferno_ghostwriter.images.memes.compose import compose, scheme_for
@@ -397,13 +397,15 @@ class MemeMaker:
         meme_format: str | None = None,
         concept_index: int | None = None,
         finalists: bool = True,
+        pitch: bool = False,
         usage: UsageSink | None = None,
     ) -> MemeResult:
         """Make the meme.
 
         A fresh meme, a rethink that ran out of pitches, or another ``meme_format`` pitches again and runs the whole
         room (draw, judge, refine, finalists); ``finalists=False`` draws only the best pitch (used for an opening meme,
-        which the opening room judges). ``concept_index`` draws that stored pitch; a redraw draws the same joke again."""
+        which the opening room judges). ``concept_index`` draws that stored pitch; a redraw draws the same joke again;
+        ``pitch`` pitches a new round. New rounds are added to the board (``images/board.py``), never swapped in."""
         state = load_state(spec)
         index: int | None = None
         run = False
@@ -411,19 +413,23 @@ class MemeMaker:
             if state is None or not 0 <= concept_index < len(state.get("concepts", [])):
                 raise ImageProviderError("That idea is no longer available. Click New idea for fresh pitches.")
             index = concept_index
-        elif state is not None and state.get("brief") == post.brief and not meme_format and (redraw or rethink):
+        elif state is not None and state.get("brief") == post.brief and not meme_format and not pitch and (redraw or rethink):
             order = ranking(state, set(state.get("tried", []))) if rethink else ranking(state)
             if not rethink and isinstance(state.get("chosen"), int) and state["chosen"] in ranking(state):
                 order = [state["chosen"]]
             index = order[0] if order else None
             if index is None:
-                # Every pitch has been used: ask the room for fresh ones that avoid them.
-                state = await self._ideate(post, None, [c.premise for c in load_concepts(state)], usage)
+                # Every pitch has been used: ask the room for a new round that avoids them.
+                state = await self._ideate_more(state, post, None, usage)
                 run = True
+        elif state is not None and state.get("brief") == post.brief:
+            state = await self._ideate_more(state, post, meme_format, usage)
+            run = True
         else:
             state = await self._ideate(post, meme_format, [], usage)
             run = True
         assert state is not None
+        new = list(state.pop("_new", None) or [])
 
         state.pop("fallback_from", None)
         state.pop("review", None)
@@ -431,11 +437,12 @@ class MemeMaker:
         sch = pick_scheme(post, art.palette, avoid=previous_scheme if (redraw or rethink) else "")
         state["scheme"] = sch.id
         if run and finalists:
-            return await self._run(state, post, art, sch, usage)
+            return await self._run(state, post, art, sch, usage, among=new)
 
         concepts = load_concepts(state)
         if index is None:
             order = ranking(state)
+            order = [i for i in order if i in set(new)] or order
             index = order[0] if order else None
         concept = concepts[index] if index is not None else None
         tried = {*state.get("tried", []), *([index] if index is not None else [])}
@@ -509,11 +516,24 @@ class MemeMaker:
             return None
         return (build, png, width, height), base
 
-    async def _run(self, state: dict[str, Any], post: MemeContext, art: ArtDirection, sch: Scheme, usage: UsageSink | None) -> MemeResult:
-        """Draw the best pitches, let the judge compare them with the originals, refine the best and keep them."""
+    async def _run(
+        self,
+        state: dict[str, Any],
+        post: MemeContext,
+        art: ArtDirection,
+        sch: Scheme,
+        usage: UsageSink | None,
+        *,
+        among: list[int] | None = None,
+    ) -> MemeResult:
+        """Draw the best pitches, let the judge compare them with the originals, refine the best and keep them.
+
+        ``among`` limits the candidates to those pitches (a new round added to the board)."""
         concepts = load_concepts(state)
         drawn: list[_Candidate] = []
         order = ranking(state)
+        if among:
+            order = [i for i in order if i in set(among)] or order
         fits = [i for i in order if (f := get_format(concepts[i].format)) is not None and paintable(f, concepts[i])]
         if fits and await raster.use_native(self.llm, self.settings, self._paint_seed(post), "meme"):
             # GPT paints the best paintable pitches whole instead of code drawing them: every candidate is painted.
@@ -591,6 +611,7 @@ class MemeMaker:
             result = self._finish(snapshot, cand.fmt, cand.concept, cand.built, art, painted=cand.prompt)
             label = f"{cand.fmt.name}: {cand.concept.premise}" + (" (generated by GPT)" if cand.prompt else "")
             result.label, result.score, result.reads_as = label, cand.score, cand.reads_as
+            result.fix = "" if cand.extra.get("refined") else cand.fix
             results.append(result)
         main = results[0]
         main.finalists = results if len(results) > 1 else []
@@ -800,6 +821,34 @@ class MemeMaker:
         why = ranking_.notes[chosen] if ranking_ and ranking_.notes[chosen] else ideas.why
         state.update(concepts=entries, chosen=chosen, why=why)
         return state
+
+    async def _ideate_more(self, state: dict[str, Any], post: MemeContext, only: str | None, usage: UsageSink | None) -> dict[str, Any]:
+        """Pitch a new round and add it to the board; earlier pitches keep their place, marks and scores."""
+        old = list(state.get("concepts", []))
+        fresh = await self._ideate(post, only, [str(c.get("premise") or "") for c in old], usage)
+        chosen = state.get("chosen")
+        keep = {*state.get("tried", []), *([chosen] if isinstance(chosen, int) else [])}
+        entries, mapping, new = board.merge(old, fresh["concepts"], keep=keep)
+        survivors = sorted(mapping, key=mapping.__getitem__)
+        old_panel, new_panel = state.get("panel") or {}, fresh.get("panel") or {}
+        old_scores = panel_scores(state, len(old)) or [0.0] * len(old)
+        old_notes = [*(str(n) for n in old_panel.get("notes") or []), *[""] * len(old)]
+        offset = len(survivors)
+        return {
+            **state,
+            "seed": fresh.get("seed"),
+            "why": fresh.get("why", ""),
+            "concepts": entries,
+            "tried": board.remap(state.get("tried", []), mapping),
+            "chosen": board.remap_one(chosen, mapping),
+            "panel": {
+                "scores": [old_scores[i] for i in survivors] + list(new_panel.get("scores") or [0.0] * len(new)),
+                "notes": [old_notes[i] for i in survivors] + [str(n) for n in new_panel.get("notes") or [""] * len(new)],
+                "vetoed": board.remap(old_panel.get("vetoed") or [], mapping) + [offset + int(v) for v in new_panel.get("vetoed") or []],
+                "punched_up": bool(new_panel.get("punched_up")),
+            },
+            "_new": new,
+        }
 
     @staticmethod
     def _scores(concepts: list[MemeConcept], entries: list[dict[str, Any]], ranking_: Ranking | None) -> list[float]:

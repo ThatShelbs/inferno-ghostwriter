@@ -130,7 +130,11 @@ async def test_a_new_brief_or_format_starts_a_fresh_pitch() -> None:
 
     venn = await maker.make(first.spec, POST, ART, meme_format="venn")
     state = load_state(venn.spec)
-    assert state and state["format"] == "venn" and {c["format"] for c in state["concepts"]} == {"venn"}
+    old = json.loads(first.spec)["concepts"]
+    # The round in the new format joins the board after the earlier jokes, which keep their places.
+    assert state and state["format"] == "venn" and state["concepts"][: len(old)] == old
+    assert {c["format"] for c in state["concepts"][len(old) :]} == {"venn"}
+    assert len(state["panel"]["scores"]) == len(state["concepts"]) and state["concepts"][state["chosen"]]["format"] == "venn"
     assert "Only use the format `venn`" in [c for c in llm.calls if c["task"] == "meme ideas"][-1]["prompt"]
 
 

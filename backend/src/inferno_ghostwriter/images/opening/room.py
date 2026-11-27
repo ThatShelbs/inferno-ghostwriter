@@ -32,7 +32,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from inferno_ghostwriter.config import Settings
-from inferno_ghostwriter.images import raster
+from inferno_ghostwriter.images import board, raster
 from inferno_ghostwriter.images.base import Drawn, ImageProviderError, draw_with_retry, guest_pitches, thumbnail_png
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
@@ -223,6 +223,22 @@ def sources_of(state: dict[str, Any] | None) -> list[dict[str, str]]:
     return [{"title": str(s.get("title", "")), "url": str(s.get("url", ""))} for s in build.get("sources") or [] if s.get("title")]
 
 
+def _kept(state: dict[str, Any]) -> set[int]:
+    """Board entries a new round must not push out: the one on show and the ones already drawn."""
+    chosen = state.get("chosen")
+    return {*state.get("tried", []), *([chosen] if isinstance(chosen, int) else [])}
+
+
+def _remapped(state: dict[str, Any], entries: list[dict[str, Any]], mapping: dict[int, int]) -> dict[str, Any]:
+    """The state on a merged board: stored indexes follow their pitches."""
+    out = {**state, "concepts": entries, "tried": board.remap(state.get("tried", []), mapping)}
+    out["chosen"] = board.remap_one(state.get("chosen"), mapping)
+    review = state.get("review")
+    if isinstance(review, dict) and review.get("candidates"):
+        out["review"] = {**review, "candidates": board.remap(review["candidates"], mapping)}
+    return out
+
+
 def _style_menu(ids: list[str]) -> str:
     lines = []
     for style_id in ids:
@@ -290,9 +306,11 @@ class OpeningRoom:
         style: str | None = None,
         concept_index: int | None = None,
         meme_format: str | None = None,
+        pitch: bool = False,
         usage: UsageSink | None = None,
     ) -> OpeningResult:
-        """Make the opening image. ``style`` re-pitches in one style; ``concept_index`` builds that stored pitch.
+        """Make the opening image. ``style`` re-pitches in one style; ``concept_index`` builds that stored pitch;
+        ``pitch`` pitches a new round. New rounds are added to the board (``images/board.py``), never swapped in.
 
         ``meme_format`` opens the post with a meme in that catalog format (the whole bank is open to an opener, as it
         is to the closer): the meme room pitches five jokes in it and draws the best, and the opening state keeps
@@ -311,32 +329,46 @@ class OpeningRoom:
                     "chosen": None,
                     "tried": [],
                 }
-            picked = OpeningConcept(
-                style="meme",
-                template="",
-                hook="A joke that sets up the problem this post solves.",
-                concept=f"A meme in a format you picked that sets up the tension of: {ctx.title}.",
-                content="",
-                data_claim="",
+            # One board entry per meme format the author picked: picking the format again reuses it.
+            index = next(
+                (i for i, c in enumerate(state.get("concepts", [])) if c.get("style") == "meme" and c.get("meme_format") == meme_format),
+                None,
             )
-            state["concepts"] = [*state.get("concepts", []), {**picked.model_dump(), "panel": {}}]
-            index = len(state["concepts"]) - 1
+            if index is None:
+                picked = OpeningConcept(
+                    style="meme",
+                    template="",
+                    hook="A joke that sets up the problem this post solves.",
+                    concept=f"A meme in a format you picked that sets up the tension of: {ctx.title}.",
+                    content="",
+                    data_claim="",
+                )
+                entry = {**picked.model_dump(), "panel": {}, "meme_format": meme_format}
+                entries, mapping, _ = board.merge(state.get("concepts", []), [entry], keep=_kept(state))
+                state = _remapped(state, entries, mapping)
+                index = len(entries) - 1
         elif concept_index is not None:
             if state is None or not 0 <= concept_index < len(state.get("concepts", [])):
                 raise ImageProviderError("That idea is no longer available. Click New idea for fresh pitches.")
             index = concept_index
-        elif state is not None and state.get("brief") == ctx.brief and not style and (redraw or rethink):
+        elif state is not None and state.get("brief") == ctx.brief and not style and not pitch and (redraw or rethink):
             tried = set(state.get("tried", []))
             order = ranking(state, tried) if rethink else [state["chosen"]] if isinstance(state.get("chosen"), int) else ranking(state)
             index = order[0] if order else None
             if index is None:
-                # Every pitch has been used: pitch fresh ones that avoid them.
-                state = await self._pitch(ctx, None, [c.concept for c in load_concepts(state)], usage)
+                # Every pitch has been used: pitch a new round that avoids them.
+                state = await self._pitch_more(state, ctx, None, usage)
+        elif state is not None and state.get("brief") == ctx.brief:
+            state = await self._pitch_more(state, ctx, style if style in BY_ID else None, usage)
         else:
             state = await self._pitch(ctx, style if style in BY_ID else None, [], usage)
         assert state is not None
 
         order = ranking(state)
+        new = set(state.pop("_new", None) or [])
+        if new:
+            # A new round: only its pitches compete (the earlier ones stay on the board).
+            order = [i for i in order if i in new] or order
         if index is not None:
             order = [index, *(i for i in order if i != index)]
         tried = set(state.get("tried", []))
@@ -463,6 +495,7 @@ class OpeningRoom:
             usage=usage,
         )
         review: dict[str, Any]
+        refined: set[int] = set()
         if sheet is not None:
             ranked = sheet.order()[:keep]
             review = {"why": sheet.why, "candidates": [o[0] for o in options]}
@@ -487,6 +520,7 @@ class OpeningRoom:
                     )
                     if repainted is not None:
                         options[k][1] = repainted
+                        refined.add(k)
                     return
                 fix = (
                     "\nThe judge looked at the finished picture and asked for one change; keep everything else exactly as it "
@@ -495,6 +529,7 @@ class OpeningRoom:
                 again = await self._build(concepts[i], scratch_state, ctx, art, sch, redraw=False, usage=usage, fix=fix, keep_research=True)
                 if again is not None:
                     options[k][1] = again
+                    refined.add(k)
 
             await asyncio.gather(*(refine(k) for k in to_refine(sheet.scores, ranked, self.settings)))
         else:
@@ -513,6 +548,7 @@ class OpeningRoom:
             drawn.label = labels[k]
             drawn.score = round(sheet.scores[k], 2) if sheet is not None else None
             drawn.reads_as = sheet.reads_as[k] if sheet is not None else ""
+            drawn.fix = sheet.fixes[k] if sheet is not None and k not in refined and concepts[i].style != "meme" else ""
             finalists.append(drawn)
         i, built, scratch_state = options[ranked[0]]
         for key in ("research", "post_numbers"):
@@ -765,6 +801,15 @@ class OpeningRoom:
             "chosen": None,
             "tried": [],
         }
+
+    async def _pitch_more(self, state: dict[str, Any], ctx: OpeningContext, style: str | None, usage: UsageSink | None) -> dict[str, Any]:
+        """Pitch a new round and add it to the board; earlier pitches keep their place, marks and scores."""
+        old = list(state.get("concepts", []))
+        fresh = await self._pitch(ctx, style, [str(c.get("concept") or "") for c in old], usage)
+        entries, mapping, new = board.merge(old, fresh["concepts"], keep=_kept(state))
+        merged = _remapped({**state, "mode": fresh["mode"], "summary": fresh["summary"], "_fresh": True}, entries, mapping)
+        merged["_new"] = new
+        return merged
 
     @staticmethod
     def _clean(concepts: list[OpeningConcept], styles: list[str], fixed: bool) -> list[OpeningConcept]:

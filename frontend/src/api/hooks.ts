@@ -697,6 +697,12 @@ export interface RedrawPicks {
   improve?: boolean
   /** Who pitches and designs it: 'auto' follows Settings; an optional model only while it is signed in. */
   model?: ImageRoute
+  /** Pitch a new round of ideas (added to the board) and draw the best of them. */
+  pitch?: boolean
+  /** The hook the board showed for `concept`; the server refuses (409) when the ideas changed since. */
+  pitchHook?: string
+  /** The author's changes to the idea before it is drawn ("Adjust" on the board). */
+  conceptEdit?: { hook?: string; concept?: string; words?: string[] }
 }
 
 export function useImageMutations(projectId: number) {
@@ -713,6 +719,9 @@ export function useImageMutations(projectId: number) {
           tweaks: picks.tweaks ?? null,
           improve: picks.improve ?? true,
           model: picks.model ?? 'auto',
+          pitch: picks.pitch ?? false,
+          pitch_hook: picks.pitchHook ?? null,
+          concept_edit: picks.conceptEdit ?? null,
         }),
     }),
     /** Make an image extend an earlier one; it is drawn again from that image's data and look. */

@@ -31,6 +31,7 @@ from inferno_ghostwriter.images.diagrams import menu as diagram_menu
 from inferno_ghostwriter.images.figures import FigureColors, catalog_text
 from inferno_ghostwriter.images.figures import inject as inject_figures
 from inferno_ghostwriter.images.judge import judge_sheet, rank_pitches, to_refine
+from inferno_ghostwriter.images.kinds import BODY_KINDS, KINDS
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import Scheme
 from inferno_ghostwriter.images.references import ReferenceLibrary, load_png
@@ -43,19 +44,13 @@ from inferno_ghostwriter.prompts import raw, render
 
 log = logging.getLogger(__name__)
 
-# In-body kinds GPT may paint instead of Claude drawing them (wordless pictures), and the size each is painted at.
-PAINTABLE = ("illustration", "icon")
-PAINT_SIZE = {"illustration": (1600, 900), "icon": (768, 768)}
-RENDER_WIDTH = {"illustration": 1600, "diagram": 1600, "screenshot": 1600, "icon": 768, "chart": 1600}
-# How a slot of each kind may be drawn: a diagram may become a chart or an illustrated metaphor, never the reverse of a
-# screenshot (that shows a real screen) or an icon (it anchors a list).
-KIND_OPTIONS = {
-    "illustration": ("illustration", "diagram"),
-    "diagram": ("diagram", "illustration", "chart"),
-    "chart": ("chart", "diagram"),
-    "screenshot": ("screenshot",),
-    "icon": ("icon",),
-}
+# Views of the kind table (``images/kinds.py``): in-body kinds GPT may paint instead of Claude drawing them (wordless
+# pictures) and their size, the width each kind's SVG is rendered at, and how a slot of each kind may be drawn (a
+# diagram may become a chart or an illustrated metaphor; a screenshot shows a real screen, an icon anchors a list).
+PAINTABLE = tuple(k for k in BODY_KINDS if KINDS[k].paintable)
+PAINT_SIZE = {k: KINDS[k].paint_size for k in PAINTABLE}
+RENDER_WIDTH = {k: KINDS[k].render_width for k in BODY_KINDS}
+KIND_OPTIONS = {k: KINDS[k].redraw_as for k in BODY_KINDS}
 PITCHES = 4
 
 
@@ -191,11 +186,16 @@ class BodyRoom:
 
     # -- drawing ---------------------------------------------------------------------------
 
-    async def run(self, ideas: dict[str, Any], ctx: BodyContext, usage: UsageSink | None) -> tuple[Drawn, int]:
-        """Draw the best ideas, judge them, refine the winner; returns the winner (with finalists) and its index."""
+    async def run(
+        self, ideas: dict[str, Any], ctx: BodyContext, usage: UsageSink | None, *, among: list[int] | None = None
+    ) -> tuple[Drawn, int]:
+        """Draw the best ideas, judge them, refine the winner; returns the winner (with finalists) and its index.
+
+        ``among`` limits the candidates to those ideas (a new round added to the board)."""
         concepts = ideas["concepts"]
         count = max(1, self.settings.image_body_candidates)
-        picks = [i for i in range(len(concepts)) if i not in set(ideas.get("tried", []))][:count] or [0]
+        pool = among if among else list(range(len(concepts)))
+        picks = [i for i in pool if i not in set(ideas.get("tried", []))][:count] or pool[:1] or [0]
         options: list[tuple[int, Drawn]] = []
         if ctx.kind in PAINTABLE and await raster.use_native(self.llm, self.settings, f"body:{ctx.title}:{ctx.slot_id}"):
             # GPT generates this slot instead of Claude drawing it: the same number of candidates, all native.
@@ -224,7 +224,7 @@ class BodyRoom:
         if sheet is not None:
             order = sheet.order()[:keep]
             for k, (i, d) in enumerate(options):
-                d.score, d.reads_as = round(sheet.scores[k], 2), sheet.reads_as[k]
+                d.score, d.reads_as, d.fix = round(sheet.scores[k], 2), sheet.reads_as[k], sheet.fixes[k]
                 concepts[i]["reads_as"] = sheet.reads_as[k]
             for best_k in to_refine(sheet.scores, order, self.settings):
                 if not sheet.fixes[best_k]:
@@ -238,7 +238,7 @@ class BodyRoom:
                 else:
                     fixed = await self._safe_draw(concepts[i], ctx, self._fix_note(sheet.fixes[best_k], current), usage)
                 if fixed is not None:
-                    fixed.score, fixed.reads_as = current.score, current.reads_as
+                    fixed.score, fixed.reads_as = current.score, current.reads_as  # its fix is applied: none left
                     options[best_k] = (i, fixed)
         else:
             order = list(range(min(keep, len(options))))
@@ -433,16 +433,22 @@ class BodyRoom:
 
         if kind == "chart":
             chart, (png, w, h) = await design(
-                ChartSpec, lambda c, _last: vega_to_png(c.vega_lite_json, palette=palette, illustrative=c.data_is_illustrative)
+                ChartSpec,
+                lambda c, _last: vega_to_png(c.vega_lite_json, palette=palette, scheme=scheme, illustrative=c.data_is_illustrative),
             )
             caption = chart.caption
             if chart.data_is_illustrative and "illustrative" not in caption.lower():
                 caption = f"{caption} (illustrative data)"
             return Drawn(png, w, h, "vega-lite", chart.vega_lite_json, chart.alt, caption)
 
+        check = KINDS[kind].lint if kind in KINDS else None
+
         def draw_svg(made: SvgSpec, last: bool) -> tuple[bytes, int, int]:
-            if scheme is not None and kind in ("illustration", "diagram", "icon"):
-                report = lint(made.svg, size=_canvas(made.svg), allowed_colors=scheme.allowed, what=f"the {kind}")
+            # Free checks before anything is judged: strays, off-canvas shapes and dead references are fixed in code;
+            # "scheme" kinds are also snapped onto the post's colors (a screen mock keeps its own greys).
+            if check is not None and (check == "structure" or scheme is not None):
+                colors = scheme.allowed if check == "scheme" and scheme is not None else ()
+                report = lint(made.svg, size=_canvas(made.svg), allowed_colors=colors, what=f"the {kind}")
                 if report.problems and not last:
                     raise ImageProviderError("\n".join(report.problems))
                 made.svg = report.svg

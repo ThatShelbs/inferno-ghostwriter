@@ -156,6 +156,12 @@ export interface BuildsOnIn {
   slot_id: string;
 }
 
+export interface ConceptEditIn {
+  hook?: string;
+  concept?: string;
+  words?: string[] | null;
+}
+
 export interface CopyHtmlOut {
   html: string;
 }
@@ -622,6 +628,7 @@ export interface ImageOut {
   status: string;
   error: string | null;
   history: ImageHistoryOut[];
+  kind_label?: string;
   room?: ImageRoomOut | null;
   finalists?: FinalistOut[];
   reference_url?: string | null;
@@ -641,6 +648,7 @@ export interface ImageRoomOut {
   pitches?: PitchOut[];
   slots?: WordSlotOut[];
   sources?: SourceOut[];
+  suggested?: string[];
 }
 
 export interface ImageRouting {
@@ -922,6 +930,10 @@ export interface PitchOut {
   ruled_out?: boolean;
   tried?: boolean;
   current?: boolean;
+  batch?: number;
+  edited?: boolean;
+  thumb_url?: string | null;
+  version?: number | null;
 }
 
 export interface PlaybookEntry {
@@ -1030,7 +1042,10 @@ export interface ProjectUpdate {
 
 export interface RedrawIn {
   rethink?: boolean;
+  pitch?: boolean;
   concept?: number | null;
+  pitch_hook?: string | null;
+  concept_edit?: ConceptEditIn | null;
   format?: string | null;
   note?: string;
   tweaks?: Record<string, string> | null;

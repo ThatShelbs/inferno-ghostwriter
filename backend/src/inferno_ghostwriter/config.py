@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     effort_images: Effort = "medium"
     # Every redraw first critiques the current image and plans how to improve it (see images/remix.py).
     effort_image_improve: Effort = "medium"
+    # Matching the text to a redrawn image is a short find/replace list: a light call.
+    effort_image_text_sync: Effort = "low"
     # The meme writers' room: pitching and judging five jokes is worth more thought than drawing one.
     effort_meme_ideas: Effort = "high"
     # The opening image is the thumbnail: pitching across styles is worth the most thought.

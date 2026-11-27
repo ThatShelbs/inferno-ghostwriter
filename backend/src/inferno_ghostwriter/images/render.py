@@ -17,6 +17,7 @@ from lxml import etree
 from PIL import Image, ImageDraw, ImageFont
 
 from inferno_ghostwriter.images.base import ImageProviderError, to_png
+from inferno_ghostwriter.images.palettes import Scheme
 
 log = logging.getLogger(__name__)
 
@@ -129,8 +130,9 @@ def mark_illustrative(spec: dict[str, Any]) -> dict[str, Any]:
     return spec
 
 
-def prepare_vega_spec(spec: dict[str, Any] | str, palette: tuple[str, ...] = ()) -> dict[str, Any]:
-    """Validate a chart spec and give it the house theme. A brand ``palette`` (3+ colors) replaces the inferno colors."""
+def prepare_vega_spec(spec: dict[str, Any] | str, palette: tuple[str, ...] = (), scheme: Scheme | None = None) -> dict[str, Any]:
+    """Validate a chart spec and give it the house theme. A brand ``palette`` (3+ colors) wins; else the post's
+    ``scheme`` colors the chart (its ramp, so charts follow the post's inferno or viridis); else the inferno colors."""
     if isinstance(spec, str):
         try:
             spec = json.loads(spec)
@@ -145,13 +147,22 @@ def prepare_vega_spec(spec: dict[str, Any] | str, palette: tuple[str, ...] = ())
     spec.setdefault("height", 405)
     spec.setdefault("background", "#ffffff")
     config = spec.setdefault("config", {})
+    ink = "#1b0c41"
     if len(palette) >= 3:
         config.setdefault("range", {})["category"] = list(palette)
         config.setdefault("mark", {})["color"] = palette[0]
+    elif scheme is not None:
+        colors = list(scheme.chart_colors)
+        ranges = config.setdefault("range", {})
+        ranges["category"] = colors
+        ranges["ramp"] = list(scheme.ramp)
+        ranges["heatmap"] = list(scheme.ramp)
+        config.setdefault("mark", {})["color"] = colors[0]
+        ink = scheme.ink
     config.setdefault("range", {}).setdefault("category", CHART_CATEGORY)
     config.setdefault("mark", {}).setdefault("color", "#781c6d")
     config.setdefault("font", "Inter, Segoe UI, Helvetica, Arial, sans-serif")
-    config.setdefault("title", {}).update({"fontSize": 18, "anchor": "start", "color": "#1b0c41"})
+    config.setdefault("title", {}).update({"fontSize": 18, "anchor": "start", "color": ink})
     config.setdefault("view", {}).setdefault("stroke", None)
     return spec
 
@@ -170,9 +181,14 @@ def _strip_remote_data(node: Any) -> None:
 
 
 def vega_to_png(
-    spec: dict[str, Any] | str, *, scale: float = 2.0, palette: tuple[str, ...] = (), illustrative: bool = False
+    spec: dict[str, Any] | str,
+    *,
+    scale: float = 2.0,
+    palette: tuple[str, ...] = (),
+    scheme: Scheme | None = None,
+    illustrative: bool = False,
 ) -> tuple[bytes, int, int]:
-    prepared = prepare_vega_spec(spec, palette)
+    prepared = prepare_vega_spec(spec, palette, scheme)
     if illustrative:
         prepared = mark_illustrative(prepared)
     try:

@@ -15,11 +15,11 @@ export function remixSummary(remix: RemixOut | null | undefined): string {
   return [fix && `fixed "${fix.replace(/\.$/, '')}"`, twists && `tried ${twists}`].filter(Boolean).join('; ')
 }
 
-/** Earlier images this one could extend: drawn by Claude, not the opening image or the closing meme. */
+/** Earlier images this one could extend (drawn ones and the author's uploads), not the opening image or the closing meme. */
 export function buildOnChoices(image: ImageOut, images: ImageOut[]): ImageOut[] {
   if (image.kind === 'hero' || image.kind === 'meme') return []
   return images.filter(
-    (other) => other.position < image.position && other.kind !== 'hero' && other.kind !== 'meme' && !['upload', 'placeholder', ''].includes(other.provider),
+    (other) => other.position < image.position && other.kind !== 'hero' && other.kind !== 'meme' && !['placeholder', ''].includes(other.provider),
   )
 }
 
