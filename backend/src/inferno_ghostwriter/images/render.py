@@ -99,6 +99,18 @@ def svg_to_png(svg: str, *, width: int = 1600, background: str | None = "#ffffff
     return to_png(bytes(data))
 
 
+def looks_like_svg(data: bytes) -> bool:
+    head = data[:4096].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return b"<svg" in data[:4096].lower() and (head.startswith(b"<") or head.startswith(b"<?xml"))
+
+
+def upload_to_png(data: bytes) -> tuple[bytes, int, int]:
+    """Normalize an uploaded file (PNG, JPEG, WebP, GIF... or SVG) to PNG. SVG is sanitized and rendered with a transparent background."""
+    if looks_like_svg(data):
+        return svg_to_png(data.decode("utf-8", errors="replace").lstrip("﻿"), background=None)
+    return to_png(data)
+
+
 # -- Vega-Lite -----------------------------------------------------------------
 
 ILLUSTRATIVE = "Illustrative data"
