@@ -260,7 +260,22 @@ export function Slider({
 
 // -- Dialog --------------------------------------------------------------------------------
 
-export function Dialog({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; wide?: boolean }) {
+export function Dialog({
+  open,
+  onClose,
+  title,
+  children,
+  wide,
+  huge,
+}: {
+  open: boolean
+  onClose: () => void
+  title: string
+  children: ReactNode
+  wide?: boolean
+  /** A working surface (a table of choices): wider than `wide`, and it scrolls inside the viewport. */
+  huge?: boolean
+}) {
   const ref = useRef<HTMLDialogElement>(null)
   useEffect(() => {
     const dialog = ref.current
@@ -276,7 +291,7 @@ export function Dialog({ open, onClose, title, children, wide }: { open: boolean
       aria-label={title}
       className={cx(
         'm-auto w-[calc(100%-2rem)] rounded-2xl border border-line bg-surface p-0 text-fg shadow-2xl backdrop:bg-black/50',
-        wide ? 'max-w-3xl' : 'max-w-lg',
+        huge ? 'max-w-5xl' : wide ? 'max-w-3xl' : 'max-w-lg',
       )}
     >
       {open && (

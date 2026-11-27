@@ -638,6 +638,17 @@ export interface ImageOut {
   hands_on?: HandsOnOut | null;
 }
 
+export interface ImagePrioritiesIn {
+  post: Record<string, string>;
+  save_as_default?: boolean;
+}
+
+export interface ImagePrioritiesOut {
+  tags: PriorityTagOut[];
+  post: Record<string, string>;
+  persona: Record<string, string>;
+}
+
 export interface ImageRoomOut {
   room: string;
   format: string;
@@ -956,6 +967,14 @@ export interface PostPoint {
   critique: number | null;
 }
 
+export interface PriorityTagOut {
+  id: string;
+  label: string;
+  group: string;
+  hint?: string;
+  swatch?: string[];
+}
+
 export interface ProjectCreate {
   prompt: string;
   persona_id?: number | null;
@@ -1038,6 +1057,15 @@ export interface ProjectUpdate {
   persona_id?: number | null;
   stage?: "draft" | "ready" | "published" | null;
   outcome?: "too_early" | "small" | "good" | "viral" | null;
+}
+
+export interface RedrawAllIn {
+  fresh?: boolean;
+  note?: string;
+  model?: "auto" | "claude" | "codex" | "gemini";
+  improve?: boolean;
+  slots?: SlotPlanIn[];
+  image_ids?: number[];
 }
 
 export interface RedrawIn {
@@ -1258,6 +1286,17 @@ export interface SettingsOut {
   seed_samples_dir: string;
   version: string;
   demo: boolean;
+}
+
+export interface SlotPlanIn {
+  image_id: number;
+  next?: boolean;
+  concept?: number | null;
+  pitch_hook?: string | null;
+  format?: string | null;
+  note?: string | null;
+  tweaks?: Record<string, string> | null;
+  model?: "auto" | "claude" | "codex" | "gemini" | null;
 }
 
 export interface SourceOut {

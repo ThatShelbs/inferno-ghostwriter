@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, Type, Undo2, Wand2 } from 'lucide-react'
+import { ChevronDown, Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, SkipForward, Type, Undo2, Wand2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 
@@ -266,6 +266,18 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
             title="Every idea pitched for this image: pick one, adjust one, pitch new ones or try another format"
           >
             Ideas
+          </Button>
+        )}
+        {!handsOn && room && (room.ideas_left ?? 0) > 0 && (
+          <Button
+            size="sm"
+            variant="secondary"
+            icon={<SkipForward className="size-4" />}
+            onClick={() => redraw(true, {}, 'Drawing the next idea…')}
+            disabled={busy}
+            title="Replace this image with the next idea pitched for it (no new pitching)"
+          >
+            Next idea
           </Button>
         )}
         <span className="inline-flex">

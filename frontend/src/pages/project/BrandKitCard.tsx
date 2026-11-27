@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Palette, RefreshCw } from 'lucide-react'
+import { Palette, RefreshCw, Wand2 } from 'lucide-react'
 import { useState } from 'react'
 
 import { errorText } from '../../api/client'
@@ -10,6 +10,7 @@ import { textSyncNote, type TextSyncNote } from '../../lib/textSync'
 import { BrandKitFields } from '../../components/BrandKitFields'
 import { brandKitOf, isEmptyBrandKit } from '../../lib/brandKit'
 import { Button, Card, Dialog, Notice, ProgressBar } from '../../components/ui'
+import { ImageStudio } from './ImageStudio'
 
 /** This post's image look, and a one-click redraw of every image in it. */
 export function BrandKitCard({ project, disabled }: { project: ProjectOut; disabled?: boolean }) {
@@ -19,6 +20,7 @@ export function BrandKitCard({ project, disabled }: { project: ProjectOut; disab
   const { data: personas = [] } = usePersonas()
   const persona = personas.find((p) => p.id === project.persona_id)
   const [open, setOpen] = useState(false)
+  const [studio, setStudio] = useState(false)
   const [kit, setKit] = useState(() => brandKitOf(project.brand_kit))
   const [jobId, setJobId] = useState<string | null>(null)
   const [textNote, setTextNote] = useState<TextSyncNote | null>(null)
@@ -28,7 +30,8 @@ export function BrandKitCard({ project, disabled }: { project: ProjectOut; disab
     void qc.invalidateQueries({ queryKey: keys.project(project.id) })
   })
   const saved = brandKitOf(project.brand_kit)
-  const redraw = () => redrawAll.mutate(undefined, { onSuccess: (j) => setJobId(j.id) })
+  // After a brand kit change every picture keeps its idea and takes the new look (no new pitching, no critique).
+  const redraw = () => redrawAll.mutate({ fresh: false, improve: false }, { onSuccess: (j) => setJobId(j.id) })
   const save = (thenRedraw: boolean) =>
     update.mutate(
       { brand_kit: kit },
@@ -81,13 +84,20 @@ export function BrandKitCard({ project, disabled }: { project: ProjectOut; disab
           <p className="text-xs text-muted">{job.message || 'Starting'}</p>
         </div>
       ) : (
-        <Button size="sm" variant="secondary" icon={<RefreshCw className="size-4" />} disabled={disabled} loading={redrawAll.isPending} onClick={redraw}>
-          Redraw all images
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="secondary" icon={<Wand2 className="size-4" />} disabled={disabled} onClick={() => setStudio(true)}>
+            Image studio
+          </Button>
+          <Button size="sm" variant="ghost" icon={<RefreshCw className="size-4" />} disabled={disabled} loading={redrawAll.isPending} onClick={redraw}>
+            Redraw all images
+          </Button>
+        </div>
       )}
       {job.status === 'failed' && <Notice tone="error">{job.error}</Notice>}
       {textNote && !jobId && <Notice tone={textNote.tone}>{textNote.text}</Notice>}
       {redrawAll.error && <Notice tone="error">{errorText(redrawAll.error)}</Notice>}
+
+      <ImageStudio open={studio} onClose={() => setStudio(false)} project={project} onStarted={setJobId} />
 
       <Dialog open={open} onClose={() => setOpen(false)} title="Image brand kit">
         <div className="space-y-5">

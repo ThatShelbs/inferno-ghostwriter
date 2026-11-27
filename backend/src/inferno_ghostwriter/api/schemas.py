@@ -815,6 +815,63 @@ class RedrawIn(BaseModel):
     model: ImageRoute = "auto"
 
 
+class SlotPlanIn(BaseModel):
+    """What Image studio asks of one slot. Anything left out follows the run's own settings."""
+
+    image_id: int
+    # Draw the next stored idea (a fresh pitch when none is left): replaces just this image.
+    next: bool = False
+    # Draw this stored idea / format / meme as it is (see ``RedrawIn``).
+    concept: int | None = Field(default=None, ge=0)
+    pitch_hook: str | None = Field(default=None, max_length=600)
+    format: str | None = None
+    # This slot's own steer and look pins (palette, medium, cast, staging); None = the run's.
+    note: str | None = Field(default=None, max_length=500)
+    tweaks: dict[str, str] | None = None
+    model: ImageRoute | None = None
+
+
+class RedrawAllIn(BaseModel):
+    """Image studio: start the whole set over, steer it with a note, or give each slot its own idea, look and model."""
+
+    # Pitch all-new ideas for each slot (start over); False keeps each slot's idea on show and only redraws it.
+    fresh: bool = True
+    # The author's feedback for the whole run, said to every slot that has no note of its own.
+    note: str = Field("", max_length=500)
+    # Who does the image work for slots with no model of their own (see ``RedrawIn.model``).
+    model: ImageRoute = "auto"
+    # Critique the current picture first when slots are redrawn as they are (``fresh`` off).
+    improve: bool = True
+    # Only these slots (all drawn images when empty). A slot listed here may carry its own settings.
+    slots: list[SlotPlanIn] = Field(default_factory=list, max_length=24)
+    # Slots that run with the run's settings and no settings of their own.
+    image_ids: list[int] = Field(default_factory=list, max_length=24)
+
+
+class PriorityTagOut(BaseModel):
+    """One chip of the priorities chart (``images.priorities``)."""
+
+    id: str
+    label: str
+    group: str
+    hint: str = ""
+    # Color tags only: the palette's colors, dark to light.
+    swatch: list[str] = []
+
+
+class ImagePrioritiesOut(BaseModel):
+    tags: list[PriorityTagOut]
+    # {tag id: "prefer" | "avoid"}: this post's own choices, and the persona's defaults under them.
+    post: dict[str, str]
+    persona: dict[str, str]
+
+
+class ImagePrioritiesIn(BaseModel):
+    post: dict[str, str]
+    # Also keep this chart as the persona's default for every post.
+    save_as_default: bool = False
+
+
 class BuildsOnIn(BaseModel):
     """Make an image extend an earlier one; it is drawn again from that image's source."""
 

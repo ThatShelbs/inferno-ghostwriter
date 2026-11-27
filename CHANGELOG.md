@@ -4,6 +4,11 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ## [Unreleased]
 
+### Added
+
+- **Image studio**: one dialog to steer every image in a post. Start the whole set over with all-new ideas (optionally steered by a written note), keep each idea and only redraw it, give each slot its own idea, colours and model (or set them for all slots at once), draw a single slot alone, or replace one image with its next idea. A middle slot can now be any of the meme formats. A **Priorities** tab holds a chip chart of styles, formats and looks to prefer or avoid, saved per post or as the persona's default. See `docs/images.md`.
+- **Next idea** button on every image card that has an untried idea.
+
 ### Fixed
 
 - **Pasting into Medium no longer fails on images ("Uh oh").** The *Copy* export embedded each full-size PNG; it now shrinks images to at most 1400 px wide (PNG or JPEG, whichever is smaller). The zip keeps the originals.
