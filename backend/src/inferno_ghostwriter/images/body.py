@@ -43,6 +43,9 @@ from inferno_ghostwriter.prompts import raw, render
 
 log = logging.getLogger(__name__)
 
+# In-body kinds GPT may paint instead of Claude drawing them (wordless pictures), and the size each is painted at.
+PAINTABLE = ("illustration", "icon")
+PAINT_SIZE = {"illustration": (1600, 900), "icon": (768, 768)}
 RENDER_WIDTH = {"illustration": 1600, "diagram": 1600, "screenshot": 1600, "icon": 768, "chart": 1600}
 # How a slot of each kind may be drawn: a diagram may become a chart or an illustrated metaphor, never the reverse of a
 # screenshot (that shows a real screen) or an icon (it anchors a list).
@@ -194,9 +197,9 @@ class BodyRoom:
         count = max(1, self.settings.image_body_candidates)
         picks = [i for i in range(len(concepts)) if i not in set(ideas.get("tried", []))][:count] or [0]
         options: list[tuple[int, Drawn]] = []
-        if ctx.kind == "illustration" and await raster.use_native(self.llm, self.settings, f"body:{ctx.title}:{ctx.slot_id}"):
+        if ctx.kind in PAINTABLE and await raster.use_native(self.llm, self.settings, f"body:{ctx.title}:{ctx.slot_id}"):
             # GPT generates this slot instead of Claude drawing it: the same number of candidates, all native.
-            ideas_ok = [i for i in picks if concepts[i].get("kind", "illustration") == "illustration"] or picks[:1]
+            ideas_ok = [i for i in picks if concepts[i].get("kind", ctx.kind) == ctx.kind] or picks[:1]
             made = await asyncio.gather(*(self._painted(concepts[i], ctx, usage) for i in ideas_ok))
             options = [(i, d) for i, d in zip(ideas_ok, made, strict=True) if d is not None]
         if not options:  # drawn slot, or generation failed: Claude draws the same pitches
@@ -252,17 +255,19 @@ class BodyRoom:
         return winner, winner_index
 
     async def _painted(self, idea: dict[str, Any], ctx: BodyContext, usage: UsageSink | None) -> Drawn | None:
-        """A natively generated illustration from the pitch (None when generation is unavailable or fails)."""
-        subject = f"An illustration for a blog post titled '{ctx.title}'. Its job: {ctx.purpose}\n{concept_text(idea)}"
+        """A natively generated illustration or icon from the pitch (None when generation is unavailable or fails)."""
+        what = "A simple, bold icon (one subject, no background clutter)" if ctx.kind == "icon" else "An illustration"
+        subject = f"{what} for a blog post titled '{ctx.title}'. Its job: {ctx.purpose}\n{concept_text(idea)}"
         extra = "\n".join(
             x for x in (ctx.visual_style and f"Visual style: {ctx.visual_style}", ctx.note and f"The author asked: {ctx.note}") if x
         )
-        prompt = raster.prompt_for(subject, scheme=ctx.scheme, palette=ctx.palette, extra=extra)
-        png = await raster.paint(self.llm, prompt, size=(1600, 900), images=[ctx.reference] if ctx.reference else None, usage=usage)
+        width, height = PAINT_SIZE.get(ctx.kind, (1600, 900))
+        prompt = raster.prompt_for(subject, scheme=ctx.scheme, palette=ctx.palette, extra=extra, shape=raster.aspect(width, height))
+        png = await raster.paint(self.llm, prompt, size=(width, height), images=[ctx.reference] if ctx.reference else None, usage=usage)
         if png is None:
             return None
         alt = str(idea.get("reader_takeaway") or idea.get("concept") or ctx.purpose)
-        return Drawn(png, 1600, 900, raster.PROVIDER, raster.spec(prompt, alt=alt), alt, "")
+        return Drawn(png, width, height, raster.PROVIDER, raster.spec(prompt, alt=alt, size=[width, height]), alt, "")
 
     async def repaint(self, spec: str, instruction: str, current: bytes | None, usage: UsageSink | None) -> Drawn:
         """Paint a painting again from its stored prompt. With ``current`` (an edit, or the judge's fix) GPT changes
@@ -276,11 +281,14 @@ class BodyRoom:
             prompt, shown = f"{base}\nChange the attached picture as follows and keep everything else exactly as it is: {note}", [current]
         elif note:
             prompt = f"{base}\n{note}"
-        png = await raster.paint(self.llm, prompt, size=(1600, 900), images=shown, usage=usage)
+        size = stored.get("size")
+        width, height = (int(size[0]), int(size[1])) if isinstance(size, list) and len(size) == 2 else (1600, 900)
+        png = await raster.paint(self.llm, prompt, size=(width, height), images=shown, usage=usage)
         if png is None:
             raise ImageProviderError("GPT image generation is unavailable. Sign in to Codex in Settings, or Redraw to let Claude draw it.")
         # The stored prompt stays the original: an edit changes the picture, not what it is of.
-        return Drawn(png, 1600, 900, raster.PROVIDER, raster.spec(base, alt=stored.get("alt", "")), str(stored.get("alt") or ""), "")
+        spec_text = raster.spec(base, alt=stored.get("alt", ""), size=[width, height])
+        return Drawn(png, width, height, raster.PROVIDER, spec_text, str(stored.get("alt") or ""), "")
 
     @staticmethod
     def _fix_note(fix: str, current: Drawn) -> str:

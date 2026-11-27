@@ -6,6 +6,7 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Changed
 
+- **ChatGPT makes most images when it is signed in.** Its own image generation now also paints memes and data art, not just illustrations and visual-metaphor openers. By default it makes about 80% of memes in famous, comic and caption formats, painted whole with their words (the judge checks the spelling), about 80% of data art openers (kept abstract) and about 60% of illustrations, icons and metaphor openers. Each kind has its own setting under *Settings → Optional models → Image work*. Redraw now rolls again, so a post is no longer stuck with code drawing. Charts, diagrams, screenshots and chart or chat-style memes stay code-drawn. Retyping a painted meme's *Words* paints it again.
 - **Image credits name only the model** ("Made with Claude Opus 5.5"), not the drawing tool. A chart credited "+ Vega-Lite" could sit under a post whose code used matplotlib; a hands-on slot that falls back to a plain chart also no longer carries a brief that names another plotting library.
 - **Up to 22 images per post.** Room for an opener, a closing meme and a top-20 list in between. The Images sliders now go to 22 (they stopped at 12).
 

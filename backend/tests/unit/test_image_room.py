@@ -13,7 +13,7 @@ from pydantic import BaseModel
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.demo import DRAFT, FakeLLM
-from inferno_ghostwriter.images import ImageProviderError
+from inferno_ghostwriter.images import ImageProviderError, raster
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
 from inferno_ghostwriter.images.judge import SheetVerdict, judge_sheet, rank_pitches
 from inferno_ghostwriter.images.memes import ArtDirection, MemeContext, MemeMaker, load_state
@@ -137,7 +137,7 @@ async def test_stored_pitches_and_redraws_need_no_pitching_call() -> None:
     assert load_state(picked.spec)["chosen"] == 3 and llm.calls == []  # type: ignore[index]
     with pytest.raises(ImageProviderError):
         await maker.make(first.spec, POST, ART, concept_index=40)
-    reworded = maker.reword(picked.spec, {"out3": "fatal: nobody owns this chart"}, ART)
+    reworded = await maker.reword(picked.spec, {"out3": "fatal: nobody owns this chart"}, ART)
     assert "nobody owns this chart" in reworded.alt and llm.calls == []
     # A remix redraw sends the critique to the meme by restaging its words.
     remixed = await maker.make(first.spec, POST, ArtDirection(visual_style="x", note="angrier"), redraw=True)
@@ -228,9 +228,13 @@ async def test_an_in_body_image_gets_ideas_candidates_and_finalists() -> None:
     assert drawn.provider == "claude-diagram" and "image sheet judge" in llm.tasks()
 
 
-def with_share(share: float) -> Settings:
+def with_share(share: float, *, meme: float | None = None, art: float | None = None) -> Settings:
+    """Settings whose GPT painting shares are all ``share`` unless ``meme`` or ``art`` say otherwise."""
     settings = Settings()
-    settings.secondary.images.native_share = share
+    images = settings.secondary.images
+    images.native_share = share
+    images.meme_share = share if meme is None else meme
+    images.art_share = share if art is None else art
     return settings
 
 
@@ -296,6 +300,105 @@ async def test_an_opener_is_native_or_drawn_never_both() -> None:
     candidates = len(state["review"]["candidates"])
     assert llm.tasks().count("raster image") == candidates  # every candidate is native, none drawn alongside
     assert result.provider == "gpt-image" and state["medium"] == "raster" and state["prompt"]
+
+
+def painter(fail: bool = False) -> FakeLLM:
+    class Failing(FakeLLM):
+        async def paint(self, prompt: str, *, images: list[bytes] | None = None, usage: Any = None) -> bytes:
+            raise LLMError("no image")
+
+    llm = Failing() if fail else FakeLLM()
+    llm.painter = True
+    return llm
+
+
+def paint_prompts(llm: FakeLLM) -> list[str]:
+    return [c["prompt"] for c in llm.calls if c["task"] == "raster image"]
+
+
+async def test_gpt_paints_a_famous_meme_whole_with_its_words() -> None:
+    llm = painter()
+    maker = MemeMaker(llm, with_share(0, meme=1))
+    result = await maker.make("", POST, ART, meme_format="nope_yep")
+    state = load_state(result.spec)
+    assert state is not None and result.provider == "gpt-image" and state["painted"]["prompt"]
+    prompts = paint_prompts(llm)
+    assert 1 <= len(prompts) <= 3 and all("spell every word exactly" in p for p in prompts)
+    words = [t["text"] for t in state["build"]["texts"] if t["text"]]
+    assert words and all(f'"{w}"' in prompts[0] for w in words)  # every word is quoted for GPT
+    assert all(f.provider == "gpt-image" for f in result.finalists)  # no code-drawn rival alongside
+    judge = next(c for c in llm.calls if c["task"] == "image sheet judge")
+    assert "spelled exactly" in str(judge.get("prompt", ""))
+
+    # An edit and a retype paint again, shown the current picture.
+    llm.calls.clear()
+    edited = await maker.edit(result.spec, "make the ghost grin", ART, current_png=result.png)
+    assert edited.provider == "gpt-image" and llm.calls[-1]["images"] == 1 and "make the ghost grin" in llm.calls[-1]["prompt"]
+    slot = state["build"]["texts"][0]["slot"]
+    retyped = await maker.reword(edited.spec, {slot: "brand new words"}, ART, current_png=edited.png)
+    assert retyped.provider == "gpt-image" and '"brand new words"' in llm.calls[-1]["prompt"] and llm.calls[-1]["images"] == 1
+
+    # A redraw paints the same meme again; a new idea picked from the board may be drawn by code (share 0).
+    again = await MemeMaker(llm, with_share(0, meme=1)).make(result.spec, POST, ART, redraw=True)
+    assert again.provider == "gpt-image"
+    drawn = await MemeMaker(llm, with_share(0)).make(result.spec, POST, ART, concept_index=1)
+    assert drawn.provider != "gpt-image" and "painted" not in (load_state(drawn.spec) or {})
+
+
+async def test_chart_and_artifact_memes_stay_code_drawn_and_a_failed_painting_falls_back() -> None:
+    llm = painter()
+    result = await MemeMaker(llm, with_share(1)).make("", POST, ART, meme_format="terminal")
+    assert result.provider == "claude-meme" and not paint_prompts(llm)
+
+    llm = painter()
+    result = await MemeMaker(llm, with_share(0, meme=0)).make("", POST, ART, meme_format="nope_yep")
+    assert result.provider == "claude-meme" and not paint_prompts(llm)
+
+    llm = painter(fail=True)
+    result = await MemeMaker(llm, with_share(1)).make("", POST, ART, meme_format="nope_yep")
+    assert result.provider == "claude-meme" and "painted" not in (load_state(result.spec) or {})
+
+
+async def test_gpt_paints_abstract_data_art_openers() -> None:
+    llm = painter()
+    opening = OpeningRoom(llm, with_share(0, art=1), MemeMaker(llm, with_share(0)))
+    result = await opening.make("", opening_context(), ART)
+    state = load_opening_state(result.spec)
+    assert state is not None and result.provider == "gpt-image" and state["style"] == "data_art" and state["medium"] == "raster"
+    assert all("abstract generative data art" in p and "no literal objects" in p for p in paint_prompts(llm))
+    # A redraw paints it again.
+    llm.calls.clear()
+    again = await opening.make(result.spec, opening_context(), ART, redraw=True)
+    assert again.provider == "gpt-image" and paint_prompts(llm)
+
+
+async def test_gpt_paints_icons_square() -> None:
+    llm = painter()
+    room = BodyRoom(llm, with_share(1))
+    ctx = body_context(kind="icon")
+    drawn, _ = await room.run(await room.pitch(ctx, [], None), ctx, None)
+    assert drawn.provider == "gpt-image" and (drawn.width, drawn.height) == (768, 768)
+    assert "1:1 square" in paint_prompts(llm)[0] and "icon" in paint_prompts(llm)[0]
+    edited = await room.repaint(drawn.spec, "bolder", drawn.png, None)
+    assert (edited.width, edited.height) == (768, 768)
+
+
+async def test_painting_shares_hold_and_each_redraw_rolls_again() -> None:
+    llm = painter()
+    settings = with_share(0.6, meme=0.8, art=0.8)
+    for kind, share in (("illustration", 0.6), ("meme", 0.8), ("data_art", 0.8)):
+        hits = [await raster.use_native(llm, settings, f"post {n}", kind) for n in range(400)]  # type: ignore[arg-type]
+        assert abs(sum(hits) / len(hits) - share) < 0.08
+    # The same slot gives the same answer for the same version, and its redraws do not all agree.
+    first = [await raster.use_native(llm, settings, "one slot") for _ in range(3)]
+    assert len(set(first)) == 1
+    rounds = []
+    for n in range(20):
+        with raster.paint_round(n):
+            rounds.append(await raster.use_native(llm, settings, "one slot"))
+    assert len(set(rounds)) == 2
+    # Without a signed-in GPT nothing is painted.
+    assert not await raster.use_native(FakeLLM(), with_share(1), "x", "meme")
 
 
 # -- story: anchors, angle cards, references -------------------------------------------------------------------------

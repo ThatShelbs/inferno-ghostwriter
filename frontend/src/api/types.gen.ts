@@ -650,6 +650,8 @@ export interface ImageRouting {
   judge?: "auto" | "claude" | "codex" | "gemini";
   raster?: boolean;
   native_share?: number;
+  meme_share?: number;
+  art_share?: number;
 }
 
 export interface ImageUpdate {

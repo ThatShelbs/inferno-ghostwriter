@@ -809,14 +809,14 @@ def remix_options() -> list[RemixDimensionOut]:
 
 
 @router.put("/images/{image_id}/words", response_model=ImageOut)
-def set_words(image_id: int, body: WordsIn, session: SessionDep, services: ServicesDep) -> ImageOut:
+async def set_words(image_id: int, body: WordsIn, session: SessionDep, services: ServicesDep) -> ImageOut:
     """Retype the words of a meme or a code-drawn opening image (see ``ImageOut.room.slots``). It is drawn again at
     once with no call to Claude; numbers and sources cannot be changed this way."""
     image = image_or_404(session, image_id)
     project = project_or_404(session, image.project_id)
     persona = persona_or_404(session, project.persona_id)
     try:
-        return image_out(services.images.set_words(image_id, body.words, persona=persona, brand_kit=dict(project.brand_kit or {})))
+        return image_out(await services.images.set_words(image_id, body.words, persona=persona, brand_kit=dict(project.brand_kit or {})))
     except ImageProviderError as exc:
         raise HTTPException(422, str(exc)) from exc
 
