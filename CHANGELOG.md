@@ -4,6 +4,10 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pasting into Medium no longer fails on images ("Uh oh").** The *Copy* export embedded each full-size PNG; it now shrinks images to at most 1400 px wide (PNG or JPEG, whichever is smaller). The zip keeps the originals.
+
 ### Changed
 
 - **ChatGPT makes most images when it is signed in.** Its own image generation now also paints memes and data art, not just illustrations and visual-metaphor openers. By default it makes about 80% of memes in famous, comic and caption formats, painted whole with their words (the judge checks the spelling), about 80% of data art openers (kept abstract) and about 60% of illustrations, icons and metaphor openers. Each kind has its own setting under *Settings → Optional models → Image work*. Redraw now rolls again, so a post is no longer stuck with code drawing. Charts, diagrams, screenshots and chart or chat-style memes stay code-drawn. Retyping a painted meme's *Words* paints it again.

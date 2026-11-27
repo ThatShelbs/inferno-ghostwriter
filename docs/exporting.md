@@ -15,7 +15,7 @@ Open a post and click **Export**. Each platform gives you a zip bundle; Medium, 
 
 Captions follow the "caption; credit" style under every image in all formats.
 
-If a pasted image does not come through (editors differ in what they accept from the clipboard), drag it in from the bundle's `images/` folder.
+Images in the clipboard copy are shrunk to at most 1400 px wide (PNG or JPEG, whichever is smaller), because editors such as Medium re-upload every pasted image and fail ("Uh oh") on large ones. The zip keeps the full-size originals. If a pasted image still does not come through, drag it in from the bundle's `images/` folder.
 
 ## LinkedIn
 

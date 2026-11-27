@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import re
 import zipfile
@@ -16,11 +15,12 @@ from inferno_ghostwriter.export.linkedin import carousel_pdf, carousel_pptx, car
 from inferno_ghostwriter.export.render import (
     Figure,
     body_html,
-    data_uri,
     figures_for,
     markdown_with_images,
     standalone_html,
     strip_title,
+    web_data_uri,
+    web_uri,
 )
 from inferno_ghostwriter.export.x import HEADER_SIZE as X_HEADER_SIZE
 from inferno_ghostwriter.export.x import teaser_post
@@ -116,8 +116,8 @@ def copy_html(project: Project, images: list[ProjectImage], image_dir: Path, pla
         return body_html(project.markdown, figures, src=lambda f: _medium_uri(f, keep_whole), heading_shift=1)
     if platform in ("substack", "linkedin", "x"):
         # The title (and subtitle) go in the platform's own fields; ## and ### map to its two heading sizes.
-        return body_html(strip_title(project.markdown), figures, src=data_uri, include_title=True)
-    return body_html(project.markdown, figures, src=data_uri)
+        return body_html(strip_title(project.markdown), figures, src=web_uri, include_title=True)
+    return body_html(project.markdown, figures, src=web_uri)
 
 
 def linkedin_post(project: Project) -> tuple[str, bool]:
@@ -187,8 +187,8 @@ def _medium_uri(fig: Figure, keep_whole: bool) -> str:
     preview crop only trims padding."""
     if keep_whole and fig.slot_id == "hero" and fig.path is not None and fig.path.exists():
         png = _thumbnail(fig.path, MEDIUM_PREVIEW_SIZE, "contain")
-        return "data:image/png;base64," + base64.b64encode(png).decode("ascii")
-    return data_uri(fig)
+        return web_data_uri(png)
+    return web_uri(fig)
 
 
 def thumbnail_fit(images: list[ProjectImage]) -> str:
