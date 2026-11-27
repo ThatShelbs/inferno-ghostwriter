@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import html
+import io
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from markdown_it import MarkdownIt
+from PIL import Image
 
 from inferno_ghostwriter.db import ProjectImage
 from inferno_ghostwriter.images import PLACEHOLDER_RE
@@ -136,6 +138,45 @@ def data_uri(fig: Figure) -> str:
     if fig.path is None or not fig.path.exists():
         return ""
     return "data:image/png;base64," + base64.b64encode(fig.path.read_bytes()).decode("ascii")
+
+
+CLIPBOARD_MAX_WIDTH = 1400
+CLIPBOARD_SMALL = 300_000
+
+
+def web_png_bytes(png: bytes, max_width: int = CLIPBOARD_MAX_WIDTH) -> tuple[bytes, str]:
+    """Shrink image bytes for a paste: Medium and friends re-upload every pasted data URI and fail on big ones.
+    Returns the smaller of an optimized PNG and a JPEG, with its mime type."""
+    if len(png) <= CLIPBOARD_SMALL:
+        return png, "image/png"
+    with Image.open(io.BytesIO(png)) as source:
+        img = source.convert("RGBA")
+        if img.width > max_width:
+            img = img.resize((max_width, round(img.height * max_width / img.width)), Image.Resampling.LANCZOS)
+        flat = Image.new("RGB", img.size, "white")
+        flat.paste(img, mask=img.getchannel("A"))
+    best, mime = png, "image/png"
+    for fmt, mime_type, options in (
+        ("PNG", "image/png", {"optimize": True}),
+        ("JPEG", "image/jpeg", {"quality": 85, "progressive": True}),
+    ):
+        out = io.BytesIO()
+        flat.save(out, format=fmt, **options)
+        if len(out.getvalue()) < len(best):
+            best, mime = out.getvalue(), mime_type
+    return best, mime
+
+
+def web_uri(fig: Figure) -> str:
+    """A data URI sized for pasting into a web editor (see ``web_png_bytes``)."""
+    if fig.path is None or not fig.path.exists():
+        return ""
+    return web_data_uri(fig.path.read_bytes())
+
+
+def web_data_uri(png: bytes) -> str:
+    data, mime = web_png_bytes(png)
+    return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
 
 
 ARTICLE_CSS = """
