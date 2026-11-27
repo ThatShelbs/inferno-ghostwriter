@@ -29,7 +29,7 @@ from inferno_ghostwriter.db import Persona, Project, ProjectImage
 from inferno_ghostwriter.experiments.models import MONTAGE_SLOT, Scenario
 from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.experiments.models import measure as measure_code
-from inferno_ghostwriter.images import handson, raster
+from inferno_ghostwriter.images import board, handson, raster
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, thumbnail_png
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
@@ -48,7 +48,7 @@ from inferno_ghostwriter.images.montage import HEIGHT, MIN_TILES, WIDTH, Tile, m
 from inferno_ghostwriter.images.opening.room import OpeningContext, OpeningRoom, opening_meme_spec
 from inferno_ghostwriter.images.opening.room import load_state as load_opening_state
 from inferno_ghostwriter.images.opening.styles import BY_ID as OPENING_STYLES
-from inferno_ghostwriter.images.palettes import Scheme, brand_scheme, from_id, house_ramp, scheme
+from inferno_ghostwriter.images.palettes import Scheme, brand_scheme, favored_ramp, from_id, house_ramp, scheme
 from inferno_ghostwriter.images.render import add_meme_text, svg_to_png
 from inferno_ghostwriter.images.specs import SvgMemeSpec
 from inferno_ghostwriter.llm import LLM, LLMError
@@ -192,6 +192,34 @@ def remix_dimensions(image: ProjectImage) -> tuple[str, ...]:
     return remixing.dimensions_for(image.kind, style)
 
 
+# Kinds GPT may recreate from an upload, and the size it paints (None = the upload's own shape).
+ADOPT_PAINT: dict[str, tuple[int, int] | None] = {"illustration": (1600, 900), "icon": (768, 768), "hero": (1600, 900), "meme": None}
+
+
+def _scaled(width: int, height: int, longest: int = 1600) -> tuple[int, int]:
+    if width <= 0 or height <= 0:
+        return 1600, 900
+    scale = longest / max(width, height)
+    return max(1, round(width * scale)), max(1, round(height * scale))
+
+
+def shown_idea(image: ProjectImage) -> str:
+    """The hook of the idea on show (from the image's room), "" for an upload or an image with no stored idea."""
+    if image.provider in ("upload", "placeholder", ""):
+        return ""
+    if image.kind == "hero" and (state := load_opening_state(image.spec)) is not None:
+        entries, chosen, key = state.get("concepts") or [], state.get("chosen"), "hook"
+    elif image.kind == "meme" and (state := load_state(image.spec)) is not None:
+        entries, chosen, key = state.get("concepts") or [], state.get("chosen"), "premise"
+    else:
+        ideas = image.ideas or {}
+        entries, chosen, key = ideas.get("concepts") or [], ideas.get("chosen"), "hook"
+    if not isinstance(chosen, int) or not 0 <= chosen < len(entries):
+        return ""
+    entry = entries[chosen]
+    return str(entry.get(key) or entry.get("concept") or "").strip()
+
+
 class ImageService:
     def __init__(
         self, *, engine: Engine, llm: LLM, settings: Settings, storage: Storage, sandbox: Callable[[], Sandbox | None] | None = None
@@ -224,9 +252,15 @@ class ImageService:
         tweaks: dict[str, str] | None = None,
         improve: bool = True,
         remix: bool = True,
+        pitch: bool = False,
+        concept_edit: dict[str, Any] | None = None,
         usage: UsageSink | None = None,
     ) -> ProjectImage:
         """Design and render one image, then persist the result.
+
+        Picking a stored idea (``concept``, optionally changed first by ``concept_edit``) or a ``format`` draws it as
+        it is: no critique, no twist. ``pitch`` adds a new round of ideas to the board and draws the best of them.
+        An upload is recreated from its picture (``_adopt``) by a plain redraw or an edit.
 
         A fresh image (or a rethink that ran out of ideas, or another ``format``) runs the whole room and keeps its
         finalists. A redraw critiques the current image first and adds a twist (``improve``; see ``images/remix.py``);
@@ -250,9 +284,18 @@ class ImageService:
                 if instruction.strip():
                     updates["edits"] = [*(image.edits or []), instruction.strip()][-MAX_EDIT_NOTES:]
             elif instruction.strip():
-                updates = await self._edit(image, persona=persona, instruction=instruction, brand_kit=brand_kit, usage=usage)
+                updates = await self._edit(
+                    image, persona=persona, title=title, markdown=markdown, instruction=instruction, brand_kit=brand_kit, usage=usage
+                )
                 updates["edits"] = [*(image.edits or []), instruction.strip()][-MAX_EDIT_NOTES:]
+            elif self._adoptable(image) and not (rethink or pitch or concept is not None or format is not None):
+                # Redraw of the author's own picture: draw it again in the post's style, from the picture itself.
+                updates = await self._adopt(
+                    image, persona=persona, title=title, markdown=markdown, instruction=note.strip(), brand_kit=brand_kit, usage=usage
+                )
             else:
+                if concept is not None and concept_edit:
+                    image = self._with_edited_pitch(image, concept, concept_edit)
                 updates = await self._produce(
                     image,
                     persona=persona,
@@ -268,8 +311,12 @@ class ImageService:
                     tweaks=tweaks,
                     improve=improve,
                     remix=remix,
+                    pitch=pitch,
                     usage=usage,
                 )
+                if concept is not None and concept_edit and image.kind not in ("hero", "meme") and "ideas" not in updates:
+                    # The changed idea is saved with the picture (a body image keeps its ideas apart from its spec).
+                    updates["ideas"] = image.ideas
             if updates.get("file_name") and "finalists" not in updates and image.finalists:
                 updates["finalists"] = self._refreshed_finalists(image, updates)
             updates["status"] = "ready"
@@ -437,6 +484,9 @@ class ImageService:
                 "file_name": file_name,
                 "provider": "upload",
                 "edits": [],
+                # The last run's finalists and twist belong to the picture the upload replaced.
+                "finalists": [],
+                "remix": {},
                 "seed": None,
                 "width": width,
                 "height": height,
@@ -454,6 +504,8 @@ class ImageService:
 
         Raises ImageProviderError when the image has no words to retype or cannot be drawn."""
         image = self._get(image_id)
+        if image.provider == "upload":
+            raise ImageProviderError("This is your own picture: use Edit to change its words.")
         art = self._art_direction(brand_kit, persona, "")
         if is_meme(image):
             meme = await self.memes.reword(meme_spec(image), words, art, current_png=self._current_png(image))
@@ -472,10 +524,13 @@ class ImageService:
             raise IndexError(index)
         chosen = finalists[index]
         fields: dict[str, Any] = {
-            k: chosen[k] for k in ("file_name", "provider", "spec", "alt", "caption", "width", "height") if k in chosen
+            k: chosen[k] for k in ("file_name", "provider", "spec", "alt", "caption", "width", "height", "credit") if k in chosen
         }
         if chosen.get("ideas") is not None:
             fields["ideas"] = chosen["ideas"]
+        # The judge's fix for this finalist (if not applied yet) is what its first Redraw will make.
+        recent = {"recent": (image.remix or {}).get("recent", [])}
+        fields["remix"] = {**recent, **({"pending_fix": chosen["fix"]} if chosen.get("fix") else {})}
         return self._save(image_id, {**fields, "edits": [], "status": "ready", "error": None})
 
     def revert(self, image_id: int, index: int) -> ProjectImage:
@@ -540,20 +595,23 @@ class ImageService:
         tweaks: dict[str, str] | None,
         improve: bool,
         remix: bool,
+        pitch: bool,
         usage: UsageSink | None,
     ) -> dict[str, Any]:
         art = replace(self._art_direction(brand_kit, persona, voice_profile), note=note, reference=self._reference(image))
         remixed: dict[str, Any] | None = None
+        # A picked idea or format, the next stored idea and a new round are drawn as they are: the author chose them.
         picked = concept is not None or format is not None
-        # A redraw or remix builds on the author's edits; picking another idea or rethinking starts over.
-        keep_edits = (
-            bool(image.edits) and bool(image.spec) and not rethink and not picked and image.provider not in ("upload", "placeholder")
-        )
+        fresh_ideas = picked or rethink or pitch
+        # A redraw builds on the author's edits; picking another idea or rethinking starts over.
+        keep_edits = bool(image.edits) and bool(image.spec) and not fresh_ideas and image.provider not in ("upload", "placeholder")
         if keep_edits:
             art = replace(art, edits=tuple(image.edits))
-        if remix and (redraw or rethink or tweaks):
+        if remix and (tweaks or (redraw and not fresh_ideas)):
+            # The critique is only asked for when the redraw draws the picture on show again (it is about that picture).
+            brainstorm = improve and not fresh_ideas and self._redraws_current(image)
             art, remixed = await self._remix(
-                image, art, title=title, markdown=markdown, brand_kit=brand_kit, pins=tweaks, brainstorm=improve and not picked, usage=usage
+                image, art, title=title, markdown=markdown, brand_kit=brand_kit, pins=tweaks, brainstorm=brainstorm, usage=usage
             )
         # Each new version rolls again for GPT painting, so a redraw can switch between painting and drawing.
         with raster.paint_round(len(image.history or [])):
@@ -564,20 +622,27 @@ class ImageService:
                 title=title,
                 markdown=markdown,
                 voice_profile=voice_profile,
-                redraw=redraw,
+                redraw=redraw and not picked,
                 rethink=rethink,
                 concept=concept,
                 format=format,
                 note=note,
+                # "Pitch new ideas" (or a steer with it) adds a new round instead of moving to the next stored idea.
+                pitch=pitch or (rethink and bool(note)),
                 usage=usage,
             )
-        updates = {**self._result(image, drawn, persona), **extra}
         if drawn.finalists:
-            updates["finalists"] = [self._finalist(image, f, extra.get("ideas")) for f in drawn.finalists]
-            # The shown image is the first finalist: point it at the same file.
-            updates["file_name"] = updates["finalists"][0]["file_name"]
+            finalists = [self._finalist(image, f, extra.get("ideas"), persona) for f in drawn.finalists]
+            # The shown image is the first finalist: it shares that file (written once).
+            updates = {**self._result(image, drawn, persona, file_name=finalists[0]["file_name"]), **extra, "finalists": finalists}
+        else:
+            updates = {**self._result(image, drawn, persona), **extra}
+        # The judge's unused fix waits for the first Redraw, which then needs no critique call of its own.
+        pending = {"pending_fix": drawn.fix} if drawn.fix else {}
         if remixed is not None:
-            updates["remix"] = remixed
+            updates["remix"] = {**remixed, **pending}
+        elif pending or (image.remix or {}).get("pending_fix"):
+            updates["remix"] = {**{k: v for k, v in (image.remix or {}).items() if k != "pending_fix"}, **pending}
         if image.edits and not keep_edits:
             updates["edits"] = []
         return updates
@@ -605,7 +670,9 @@ class ImageService:
             house_only=kind in ("hero", "meme"),
         )
         plan = None
-        if brainstorm:
+        if brainstorm and str(previous.get("pending_fix") or "").strip():
+            plan = remixing.plan_from_fix(str(previous["pending_fix"]))
+        elif brainstorm:
             png = None
             if image.file_name:
                 path = self.storage.image_dir(image.project_id) / image.file_name
@@ -638,14 +705,15 @@ class ImageService:
         concept: int | None,
         format: str | None,
         note: str,
+        pitch: bool,
         usage: UsageSink | None,
     ) -> tuple[Drawn, dict[str, Any]]:
-        """Route to the image's room; returns the drawing and any extra fields to store."""
+        """Route to the image's room; returns the drawing and any extra fields to store.
+
+        ``pitch`` adds a new round of ideas to the board (``images/board.py``) and draws the best of them."""
         kind = image.kind
         seed = random.randrange(1 << 30)
-        # "Pitch new ideas" with a steer starts the room over instead of moving to the next stored idea.
-        restart = rethink and bool(note)
-        spec = "" if restart else image.spec
+        spec = image.spec
         meme_format = format if format is not None and get_format(format) else None
         if kind == "hero":
             opening_style = format if format in OPENING_STYLES else None
@@ -661,6 +729,7 @@ class ImageService:
                 style=opening_style,
                 concept_index=concept,
                 meme_format=meme_format,
+                pitch=pitch,
                 usage=usage,
             )
             return result, {}
@@ -669,12 +738,12 @@ class ImageService:
                 raise ImageProviderError(f"Unknown meme format: {format}")
             post = self._meme_context(image, persona, title, markdown, voice_profile, note=note, seed=seed)
             meme = await self.memes.make(
-                spec, post, art, redraw=redraw, rethink=rethink, meme_format=meme_format, concept_index=concept, usage=usage
+                spec, post, art, redraw=redraw, rethink=rethink, meme_format=meme_format, concept_index=concept, pitch=pitch, usage=usage
             )
             return meme, {}
         return await self._draw_body(
             image, art, persona=persona, title=title, markdown=markdown, voice_profile=voice_profile,
-            redraw=redraw, rethink=rethink, concept=concept, format=format, note=note, seed=seed, usage=usage,
+            redraw=redraw, rethink=rethink, concept=concept, format=format, note=note, pitch=pitch, seed=seed, usage=usage,
         )  # fmt: skip
 
     async def _draw_body(
@@ -691,26 +760,30 @@ class ImageService:
         concept: int | None,
         format: str | None,
         note: str,
+        pitch: bool,
         seed: int,
         usage: UsageSink | None,
     ) -> tuple[Drawn, dict[str, Any]]:
         ctx = self._body_context(image, art, title=title, markdown=markdown, voice_profile=voice_profile, note=note, seed=seed)
-        ideas = {} if rethink and note else dict(image.ideas or {})
+        ideas = dict(image.ideas or {})
         stored = ideas if ideas.get("concepts") and ideas.get("brief") == ctx.brief else {}
         concepts: list[dict[str, Any]] = list(stored.get("concepts") or [])
         variation = self._body_variation(image, art, redraw=redraw, rethink=rethink)
 
         if concept is not None:
-            if not 0 <= concept < len(concepts):
-                raise ImageProviderError("That idea is no longer available. Click Ideas for fresh pitches.")
-            stored["chosen"], stored["tried"] = concept, sorted({*stored.get("tried", []), concept})
-            drawn = await self.body.draw(concepts[concept], ctx, "", usage)
-            return drawn, {"ideas": stored}
+            # The board showed these ideas, so a picked one is drawn even if the brief was edited since.
+            board_ideas: list[dict[str, Any]] = list(ideas.get("concepts") or [])
+            if not 0 <= concept < len(board_ideas):
+                raise ImageProviderError("That idea is no longer available. Open Ideas again for the current pitches.")
+            ideas["chosen"], ideas["tried"] = concept, sorted({*ideas.get("tried", []), concept})
+            drawn = await self.body.draw(board_ideas[concept], ctx, "", usage)
+            return drawn, {"ideas": ideas}
         if format is not None:
             # Another way to draw it (a diagram as a chart): one idea in that kind, from the chosen idea or the brief.
             base = dict(concepts[stored["chosen"]]) if isinstance(stored.get("chosen"), int) else {"concept": ctx.brief}
             drawn = await self.body.draw({**base, "kind": format}, ctx, variation, usage)
-            return drawn, {}
+            # No stored idea is on show any more (the board stops marking the old one).
+            return drawn, ({"ideas": {**ideas, "chosen": None}} if ideas else {})
         fresh_room = self.settings.image_body_candidates > 1 and not image.builds_on
         if redraw and not rethink and image.provider == raster.PROVIDER:
             # A painting is painted again from its prompt, with the redraw's critique and twist; Claude draws it
@@ -722,7 +795,7 @@ class ImageService:
         if redraw and not rethink and stored and isinstance(stored.get("chosen"), int):
             # Redraw the idea on show (with the redraw's critique and twist).
             return await self.body.draw(concepts[stored["chosen"]], ctx, variation, usage), {}
-        if rethink and stored:
+        if rethink and stored and not pitch:
             untried = [i for i in range(len(concepts)) if i not in set(stored.get("tried", []))]
             if untried:
                 i = untried[0]
@@ -731,11 +804,65 @@ class ImageService:
         if not fresh_room:
             # An image that builds on another (or a one-candidate setting) is drawn straight from its brief.
             return await self.body.draw(None, ctx, variation, usage), {}
-        exclude = [str(c.get("concept", "")) for c in concepts] if rethink else []
+        exclude = [str(c.get("concept", "")) for c in concepts] if rethink or pitch else []
         pitched = await self.body.pitch(ctx, exclude, usage)
-        drawn, index = await self.body.run(pitched, ctx, usage)
+        # The new round joins the board (earlier ideas keep their place); only its ideas compete.
+        chosen = stored.get("chosen")
+        keep = {*stored.get("tried", []), *([chosen] if isinstance(chosen, int) else [])}
+        merged, mapping, new = board.merge(concepts, pitched["concepts"], keep=keep)
+        pitched = {**pitched, "concepts": merged, "tried": board.remap(stored.get("tried", []), mapping)}
+        drawn, index = await self.body.run(pitched, ctx, usage, among=new)
         pitched["chosen"] = index
         return drawn, {"ideas": pitched}
+
+    def _redraws_current(self, image: ProjectImage) -> bool:
+        """Whether a plain Redraw draws the picture on show again (so a critique of it is worth a call)."""
+        if image.provider in ("upload", "placeholder", ""):
+            return False
+        if image.kind == "hero":
+            return load_opening_state(image.spec) is not None
+        if image.kind == "meme":
+            return load_state(image.spec) is not None
+        if image.provider == raster.PROVIDER:
+            return True
+        ideas = image.ideas or {}
+        same_brief = ideas.get("brief") == (image.prompt or image.purpose)
+        return isinstance(ideas.get("chosen"), int) and bool(ideas.get("concepts")) and same_brief
+
+    @staticmethod
+    def _with_edited_pitch(image: ProjectImage, index: int, edit: dict[str, Any]) -> ProjectImage:
+        """The image with one stored idea changed as the author typed it ("Adjust" on the ideas board)."""
+        hook, text = str(edit.get("hook") or ""), str(edit.get("concept") or "")
+        words = [str(w) for w in edit.get("words") or []]
+        gone = "That idea is no longer available. Open Ideas again for the current pitches."
+        if image.kind == "hero" and (state := load_opening_state(image.spec)) is not None:
+            concepts = list(state.get("concepts") or [])
+            if not 0 <= index < len(concepts):
+                raise ImageProviderError(gone)
+            concepts[index] = board.edit_pitch(concepts[index], {"hook": hook, "concept": text})
+            return image.model_copy(update={"spec": json.dumps({**state, "concepts": concepts})})
+        if image.kind == "meme" and (state := load_state(image.spec)) is not None:
+            concepts = list(state.get("concepts") or [])
+            if not 0 <= index < len(concepts):
+                raise ImageProviderError(gone)
+            entry = board.edit_pitch(concepts[index], {"premise": hook, "callback": text})
+            if words:
+                # The board lists a pitch's non-empty words in slot order; the author's list replaces them in that order.
+                texts, k = [], 0
+                for t in entry.get("texts") or []:
+                    if str(t.get("text", "")).strip() and k < len(words):
+                        t = {**t, "text": words[k].strip() or t.get("text", "")}
+                        k += 1
+                    texts.append(t)
+                entry["texts"] = texts
+            concepts[index] = entry
+            return image.model_copy(update={"spec": json.dumps({**state, "concepts": concepts})})
+        ideas = dict(image.ideas or {})
+        concepts = list(ideas.get("concepts") or [])
+        if not 0 <= index < len(concepts):
+            raise ImageProviderError(gone)
+        concepts[index] = board.edit_pitch(concepts[index], {"hook": hook, "concept": text})
+        return image.model_copy(update={"ideas": {**ideas, "concepts": concepts}})
 
     def _body_variation(self, image: ProjectImage, art: ArtDirection, *, redraw: bool, rethink: bool) -> str:
         kind = image.kind
@@ -777,11 +904,25 @@ class ImageService:
             scheme=self._post_scheme(image.project_id, art.palette),
             note=note,
             seed=seed,
-            reference=art.reference,
+            # The author's style reference; else, for an image that builds on an upload, that picture.
+            reference=art.reference if art.reference is not None else self._upload_base(image),
         )
 
+    def _upload_base(self, image: ProjectImage) -> bytes | None:
+        if not image.builds_on:
+            return None
+        with Session(self.engine) as session:
+            base = session.exec(
+                select(ProjectImage).where(col(ProjectImage.project_id) == image.project_id, col(ProjectImage.slot_id) == image.builds_on)
+            ).first()
+        if base is None or base.provider != "upload":
+            return None
+        png = self._current_png(base)
+        return thumbnail_png(png, 1200) if png is not None else None
+
     def _post_scheme(self, project_id: int, palette: tuple[str, ...]) -> Scheme:
-        """One color ramp for every image of a post: the brand palette, else the opening image's ramp on white."""
+        """One color ramp for the in-body images of a post, on white: the brand palette; else the opening image's ramp
+        when it is a house favorite (inferno or viridis); else a favorite chosen per post, so posts vary."""
         if len(palette) >= 3 and house_ramp(palette) is None:
             return brand_scheme(palette)
         with Session(self.engine) as session:
@@ -789,20 +930,26 @@ class ImageService:
                 select(ProjectImage).where(col(ProjectImage.project_id) == project_id, col(ProjectImage.kind) == "hero")
             ).first()
         found = from_id(str((load_opening_state(hero.spec) or {}).get("scheme") or "")) if hero else None
-        return scheme(found.ramp_id if found is not None and found.ramp_id != "brand" else "inferno", "white")
+        return scheme(favored_ramp(found.ramp_id if found is not None else None, project_id), "white")
 
     async def _edit(
         self,
         image: ProjectImage,
         *,
         persona: Persona,
+        title: str = "",
+        markdown: str = "",
         instruction: str,
         brand_kit: dict[str, Any] | None,
         usage: UsageSink | None,
     ) -> dict[str, Any]:
         """Change the current design as the author asks, keeping everything else about it."""
-        if image.provider in ("upload", "placeholder") or not image.spec:
-            raise ImageProviderError("Only images Claude drew can be edited by instruction. Redraw or upload this one instead.")
+        if image.provider == "upload":
+            return await self._adopt(
+                image, persona=persona, title=title, markdown=markdown, instruction=instruction, brand_kit=brand_kit, usage=usage
+            )
+        if image.provider == "placeholder" or not image.spec:
+            raise ImageProviderError("This image has nothing to edit yet. Redraw or upload it first.")
         if image.provider == raster.PROVIDER and raster.load(image.spec):
             current = self._current_png(image)
             return self._result(image, await self.body.repaint(image.spec, instruction, current, usage), persona)
@@ -830,14 +977,89 @@ class ImageService:
             spec=image.spec,
             brand=brand,
         )
-        if image.kind == "meme":  # an older meme: plain SVG with captions on top
+        if image.kind == "meme" and image.spec.lstrip().startswith("{"):  # an older meme: JSON of SVG + captions
             meme, _ = await self._legacy_meme(prompt, usage)
             return self._result(image, meme, persona)
         if image.provider == "claude-diagram":
             scheme_ = self._post_scheme(image.project_id, brand_palette(brand_kit))
             return self._result(image, await self.body.edit_diagram(image.spec, instruction, scheme_, usage), persona)
-        kind = "chart" if image.provider == "vega-lite" else image.kind
+        # An opening image or meme recreated from an upload is a plain SVG drawing.
+        kind = "chart" if image.provider == "vega-lite" else "illustration" if image.kind in ("hero", "meme") else image.kind
         drawn = await self.body.design(kind, prompt, task=f"{image.kind} image edit", palette=brand_palette(brand_kit), usage=usage)
+        return self._result(image, drawn, persona)
+
+    def _adoptable(self, image: ProjectImage) -> bool:
+        """An image whose own picture is the source to redraw from: the author's upload, or an opening image or meme
+        with no room state (made from an upload, or older than the rooms)."""
+        if image.provider == "upload":
+            return True
+        if image.kind not in ("hero", "meme") or image.provider not in ("claude-svg", raster.PROVIDER) or not image.file_name:
+            return False
+        return load_opening_state(image.spec) is None and load_state(meme_spec(image)) is None
+
+    async def _adopt(
+        self,
+        image: ProjectImage,
+        *,
+        persona: Persona,
+        title: str,
+        markdown: str,
+        instruction: str,
+        brand_kit: dict[str, Any] | None,
+        usage: UsageSink | None,
+    ) -> dict[str, Any]:
+        """Recreate a picture from the picture itself (one call), so the author's upload can be edited, redrawn and
+        built on like a drawn image: GPT changes it directly when it may paint this kind, else Claude redraws it as
+        SVG (a chart as Vega-Lite, its values read off the picture) in the post's colors."""
+        current = self._current_png(image)
+        if current is None:
+            raise ImageProviderError("The picture is missing. Upload it again.")
+        change = instruction.strip() or "Redraw it cleanly in this post's colors and style."
+        palette = brand_palette(brand_kit)
+        sch = self._post_scheme(image.project_id, palette)
+        label = {"hero": "The opening image", "meme": "A meme"}.get(image.kind, f"A {image.kind}")
+        if image.kind in ADOPT_PAINT and await raster.can_paint(self.llm):
+            width, height = ADOPT_PAINT[image.kind] or _scaled(image.width, image.height)
+            base = raster.prompt_for(
+                f"{label} for a blog post titled '{title}'. Its job: {image.purpose}",
+                scheme=sch,
+                palette=palette,
+                shape=raster.aspect(width, height),
+                rules="Keep every word in the attached picture exactly as written; add no new words, logos or watermarks.",
+            )
+            png = await raster.paint(
+                self.llm,
+                f"{base}\nChange the attached picture as follows and keep everything else exactly as it is: {change}",
+                size=(width, height),
+                images=[current],
+                usage=usage,
+            )
+            if png is not None:
+                alt = image.alt or image.purpose
+                drawn = Drawn(png, width, height, raster.PROVIDER, raster.spec(base, alt=alt, size=[width, height]), alt, image.caption)
+                return self._result(image, drawn, persona)
+        kind = {"hero": "illustration", "meme": "illustration"}.get(image.kind, image.kind)
+        target = {
+            "chart": "a Vega-Lite chart: read the values off the picture; where you cannot read them exactly, approximate "
+            "them and set data_is_illustrative",
+            "screenshot": "an SVG mock of the same screen",
+        }.get(kind, "an SVG drawing")
+        if image.kind in ("hero", "meme"):
+            target += " on a 1600x900 canvas (viewBox 0 0 1600 900)"
+        prompt = render(
+            "image_adopt",
+            kind=image.kind,
+            slot_id=image.slot_id,
+            title=title,
+            purpose=image.purpose or image.prompt,
+            target=target,
+            instruction=change,
+            colors=f"Colors: {sch.describe()}",
+            context=image_context(markdown, image.slot_id) if markdown else "(not available)",
+        )
+        drawn = await self.body.design(
+            kind, prompt, task=f"{kind} image design", palette=palette, scheme=sch, reference=thumbnail_png(current, 1200), usage=usage
+        )
         return self._result(image, drawn, persona)
 
     def _current_png(self, image: ProjectImage) -> bytes | None:
@@ -1026,7 +1248,15 @@ class ImageService:
             base = session.exec(
                 select(ProjectImage).where(col(ProjectImage.project_id) == image.project_id, col(ProjectImage.slot_id) == image.builds_on)
             ).first()
-        if base is None or not base.spec or base.provider in ("upload", "placeholder") or base.position >= image.position:
+        if base is None or base.provider == "placeholder" or base.position >= image.position:
+            return ""
+        if base.provider == "upload":
+            return (
+                f"\nThis image BUILDS ON the earlier image `{base.slot_id}` ({base.caption or base.purpose}), the author's own "
+                "picture, attached: the reader has just seen it and must feel this is the same picture taken further. Reuse its "
+                "data, palette, shapes, labels and layout where they carry over, then add what this image adds.\n"
+            )
+        if not base.spec:
             return ""
         reuse = {
             "chart": (
@@ -1046,9 +1276,10 @@ class ImageService:
             f"The base image's source:\n<base>\n{base.spec[:12000]}\n</base>\n"
         )
 
-    def _result(self, image: ProjectImage, drawn: Drawn, persona: Persona) -> dict[str, Any]:
+    def _result(self, image: ProjectImage, drawn: Drawn, persona: Persona, *, file_name: str = "") -> dict[str, Any]:
+        """The fields a drawing sets; ``file_name`` reuses a file already written (the first finalist's)."""
         return {
-            "file_name": self._write(image.project_id, image.slot_id, drawn.png),
+            "file_name": file_name or self._write(image.project_id, image.slot_id, drawn.png),
             "provider": drawn.provider,
             "width": drawn.width,
             "height": drawn.height,
@@ -1076,10 +1307,12 @@ class ImageService:
         finalists[at] = {**entry, "label": "Your latest version", "score": None, "reads_as": ""}
         return finalists
 
-    def _finalist(self, image: ProjectImage, drawn: Drawn, ideas: dict[str, Any] | None) -> dict[str, Any]:
+    def _finalist(self, image: ProjectImage, drawn: Drawn, ideas: dict[str, Any] | None, persona: Persona) -> dict[str, Any]:
         entry: dict[str, Any] = {
             "file_name": self._write(image.project_id, image.slot_id, drawn.png),
             "provider": drawn.provider,
+            "credit": credit_line(persona, drawn.provider, (_makers.get() or {}).get(drawn.provider, self.settings.model)),
+            "fix": drawn.fix,
             "spec": drawn.spec,
             "alt": drawn.alt,
             "caption": drawn.caption,
@@ -1108,6 +1341,8 @@ class ImageService:
             if record and updates.get("file_name"):
                 entry = {k: getattr(image, k) for k in HISTORY_FIELDS}
                 entry["created_at"] = datetime.now(UTC).isoformat()
+                # Which idea this version drew, so the ideas board can show its picture (and restore it for free).
+                entry["idea"] = shown_idea(image)
                 image.history = [*image.history, entry]
             session.add(image)
             session.commit()

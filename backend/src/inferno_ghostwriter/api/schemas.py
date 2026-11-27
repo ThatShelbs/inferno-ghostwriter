@@ -641,6 +641,14 @@ class PitchOut(BaseModel):
     ruled_out: bool = False
     tried: bool = False
     current: bool = False
+    # Which round of pitching it came from (higher = newer); the board shows the newest round first.
+    batch: int = 0
+    # The author changed its words before drawing it.
+    edited: bool = False
+    # The picture this idea was drawn as before (a version of the image), or None when it was never drawn.
+    thumb_url: str | None = None
+    # That version's index in ``ImageOut.history`` (restoring it costs no model call).
+    version: int | None = None
 
 
 class WordSlotOut(BaseModel):
@@ -674,6 +682,8 @@ class ImageRoomOut(BaseModel):
     # Words the author can retype (memes and code-drawn opening images).
     slots: list[WordSlotOut] = []
     sources: list[SourceOut] = []
+    # Formats that suit this image best, best first (shown as "Suggested" on the board).
+    suggested: list[str] = []
 
 
 class FinalistOut(BaseModel):
@@ -715,7 +725,9 @@ class ImageOut(BaseModel):
     status: str
     error: str | None
     history: list[ImageHistoryOut]
-    # The ideas board (every image Claude drew has one; None for uploads and older images).
+    # How the kind is named in the app ("Screenshot mock", "Opening image"...): one label everywhere.
+    kind_label: str = ""
+    # The ideas board (every image but a hands-on data viz has one; it may have no pitches yet).
     room: ImageRoomOut | None = None
     finalists: list[FinalistOut] = []
     # The author's style reference for this image ("make it like this"), or None.
@@ -769,10 +781,25 @@ class ImageUpdate(BaseModel):
     prompt: str | None = None
 
 
+class ConceptEditIn(BaseModel):
+    """The author's changes to a stored idea before it is drawn (empty fields keep the pitch's own)."""
+
+    hook: str = Field("", max_length=300)
+    concept: str = Field("", max_length=1200)
+    # A meme's words, in slot order (see ``PitchOut.words``).
+    words: list[str] | None = Field(default=None, max_length=12)
+
+
 class RedrawIn(BaseModel):
     rethink: bool = False
-    # Draw this stored idea (an index from ``ImageOut.room.pitches``) with no new pitching.
+    # Pitch a new round of ideas (added to the board, which keeps the earlier ones) and draw the best of them.
+    pitch: bool = False
+    # Draw this stored idea (an index from ``ImageOut.room.pitches``) as it is: no new pitching, no twist.
     concept: int | None = Field(default=None, ge=0)
+    # The hook of that idea as the board showed it; a mismatch means the board changed (409, reopen Ideas).
+    pitch_hook: str | None = Field(default=None, max_length=600)
+    # Change the stored idea before drawing it ("Adjust" on the board).
+    concept_edit: ConceptEditIn | None = None
     # Pitch again in this format: a meme format, an opening style or another way to draw an in-body image
     # (see GET /api/image-formats).
     format: str | None = None

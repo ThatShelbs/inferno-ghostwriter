@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { ImageOut, RemixDimensionOut } from '../../api/types.gen'
 import { buildOnChoices, dependentsOf, remixSummary, remixTwists } from '../../lib/remix'
-import { RemixDialog } from './RemixDialog'
+import { RedrawDialog } from './RedrawDialog'
 
 function image(slot: string, position: number, extra: Partial<ImageOut> = {}): ImageOut {
   return {
@@ -52,32 +52,46 @@ const DIMENSIONS: RemixDimensionOut[] = [
   { id: 'staging', label: 'Staging', options: [{ id: 'wide', label: 'Wide shot', swatch: [] }] },
 ]
 
-describe('RemixDialog', () => {
+describe('RedrawDialog', () => {
   it('offers only what this image can vary and sends the pins, leaving the rest to chance', async () => {
     const onRemix = vi.fn()
     const hero = image('hero', 0, { kind: 'hero', remix_dimensions: ['palette', 'cast'] })
-    render(<RemixDialog open onClose={() => {}} image={hero} dimensions={DIMENSIONS} onRemix={onRemix} />)
+    render(<RedrawDialog open onClose={() => {}} image={hero} dimensions={DIMENSIONS} onRedraw={onRemix} />)
 
+    await userEvent.click(screen.getByRole('button', { name: 'Experiment with…' }))
     expect(screen.getByLabelText('Colors')).toBeInTheDocument()
     expect(screen.queryByLabelText('Staging')).not.toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('Who is in it'), 'dogs')
-    await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Redraw' }))
     expect(onRemix).toHaveBeenCalledWith({ cast: 'dogs' }, true, '', 'auto')
 
     await userEvent.selectOptions(screen.getByLabelText('Colors'), 'viridis')
     await userEvent.click(screen.getByRole('switch'))
-    await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Redraw' }))
     expect(onRemix).toHaveBeenLastCalledWith({ cast: 'dogs', palette: 'viridis' }, false, '', 'auto')
     // No optional model is signed in, so there is no model choice.
     expect(screen.queryByLabelText('Model')).not.toBeInTheDocument()
   })
 
+  it('fills the note from quick steers and toggles them off again', async () => {
+    const onRemix = vi.fn()
+    render(<RedrawDialog open onClose={() => {}} image={image('img2', 1)} dimensions={DIMENSIONS} onRedraw={onRemix} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Simpler' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Fewer words' }))
+    expect(screen.getByRole('button', { name: 'Simpler' })).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(screen.getByRole('button', { name: 'Redraw' }))
+    expect(onRemix).toHaveBeenCalledWith({}, true, 'Simpler; Fewer words', 'auto')
+    await userEvent.click(screen.getByRole('button', { name: 'Simpler' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Redraw' }))
+    expect(onRemix).toHaveBeenLastCalledWith({}, true, 'Fewer words', 'auto')
+  })
+
   it('lets the author hand the remix to a signed-in optional model', async () => {
     const onRemix = vi.fn()
-    render(<RemixDialog open onClose={() => {}} image={image('img2', 1)} dimensions={DIMENSIONS} onRemix={onRemix} models={['auto', 'claude', 'codex']} />)
+    render(<RedrawDialog open onClose={() => {}} image={image('img2', 1)} dimensions={DIMENSIONS} onRedraw={onRemix} models={['auto', 'claude', 'codex']} />)
     expect(screen.queryByRole('option', { name: 'Gemini' })).not.toBeInTheDocument()
     await userEvent.selectOptions(screen.getByLabelText('Model'), 'codex')
-    await userEvent.click(screen.getByRole('button', { name: 'Remix' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Redraw' }))
     expect(onRemix).toHaveBeenCalledWith({}, true, '', 'codex')
   })
 })
@@ -109,6 +123,8 @@ describe('remix helpers', () => {
       image('meme', 5, { kind: 'meme' }),
     ]
     expect(buildOnChoices(images[3], images).map((i) => i.slot_id)).toEqual(['img2', 'img3'])
+    // The author's own picture can be built on too.
+    expect(buildOnChoices(image('img6', 6), images).map((i) => i.slot_id)).toContain('img5')
     expect(buildOnChoices(images[1], images)).toEqual([])
     expect(buildOnChoices(images[5], images)).toEqual([])
     expect(dependentsOf(images[1], images)).toEqual(['img3', 'img4'])

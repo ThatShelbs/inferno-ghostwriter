@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import random
+
 from inferno_ghostwriter.images.lint import lint
 from inferno_ghostwriter.images.palettes import (
     DARK_SURFACES,
+    FAVORED,
     RAMPS,
     SURFACES,
     brand_scheme,
     choose,
     colors_in,
+    favored_ramp,
     from_id,
     house_ramp,
     pick,
@@ -21,11 +25,16 @@ from inferno_ghostwriter.images.remix import HOUSE, PALETTE, choose_tweaks
 # -- palettes -----------------------------------------------------------------------------------------------------------
 
 
-def test_schemes_rotate_through_the_house_ramps_and_surfaces() -> None:
+def test_schemes_favor_inferno_and_viridis_without_locking_in() -> None:
     first = choose(())
     second = choose((first.id,))
-    third = choose((second.id, first.id))
-    assert len({first.ramp_id, second.ramp_id, third.ramp_id}) == 3  # inferno, magma and viridis take turns
+    assert {first.ramp_id, second.ramp_id} == set(FAVORED)  # the two favorites take turns
+    # Magma joins now and then, only after both favorites were just used.
+    ramps = {choose((second.id, first.id), rng=random.Random(seed)).ramp_id for seed in range(40)}
+    assert "magma" in ramps and ramps <= set(RAMPS)
+    assert all(choose((first.id,), rng=random.Random(seed)).ramp_id != "magma" for seed in range(40))
+    assert favored_ramp("magma", 0) in FAVORED and favored_ramp("viridis", 0) == "viridis"
+    assert {favored_ramp(None, k) for k in (0, 1)} == set(FAVORED)  # varies across posts
     assert (first.surface_id in DARK_SURFACES) != (second.surface_id in DARK_SURFACES)  # light and dark alternate
     assert choose((), ramp="viridis", dark=True).ramp_id == "viridis" and choose((), dark=False).surface_id not in DARK_SURFACES
     assert from_id("magma:white") == scheme("magma", "white") and from_id("nope:white") is None and from_id(None) is None

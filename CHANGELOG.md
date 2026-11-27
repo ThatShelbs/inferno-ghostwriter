@@ -10,6 +10,19 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Changed
 
+- **The Ideas board does what it says.** *Use this one* draws that idea exactly as pitched, with no random colour or cast twist and no rewording of a meme's chosen words; a picked meme costs no model call. **Adjust** lets you change an idea (and a meme's words) before it is drawn. **More like this** pitches a new round seeded by one idea. New rounds are added to the board instead of replacing it, ideas you already drew show their picture (click it to bring that version back for free), ruled-out ideas are folded away, and formats are chips with a *Suggested* row. *Draw next idea* and *Pitch new ideas* are now two clear buttons.
+- **One Redraw.** Remix is folded into **Redraw options** (the caret beside Redraw): quick steers (*Simpler*, *Bolder*, *Fewer words*…), your own note, pinned experiments, the critique switch, the model and the style reference. **Undo** appears after every new version.
+- **Your own pictures keep every tool.** After **Replace** you can Edit, Redraw and build on an uploaded image. It is recreated from the picture itself: ChatGPT edits it directly when signed in, otherwise Claude redraws it as a drawing or a chart with the values read off it. Old finalists and *Words* no longer linger on an upload.
+- **Fewer calls per image action.** A plain Redraw no longer reworks the post's text (only a changed idea, format or words does, at low effort); the judge's unused fix is the first Redraw's plan, so it needs no critique call; picks and new rounds skip the critique entirely.
+- **Colours favour inferno and viridis.** New images take turns between the two, with magma now and then, and charts now follow the post's colours instead of always being inferno.
+
+### Fixed
+
+- **Refused image actions are shown.** A redraw, Ideas or reference request the server refused used to vanish silently; the card now shows why. Every action is disabled from the click on, so a double click cannot start two jobs, and the spinner says what is happening.
+- **Picking an in-body idea after editing the image's brief** no longer fails with "That idea is no longer available", and *Try another format* no longer leaves the old idea marked *Showing now*.
+
+### Changed
+
 - **ChatGPT makes most images when it is signed in.** Its own image generation now also paints memes and data art, not just illustrations and visual-metaphor openers. By default it makes about 80% of memes in famous, comic and caption formats, painted whole with their words (the judge checks the spelling), about 80% of data art openers (kept abstract) and about 60% of illustrations, icons and metaphor openers. Each kind has its own setting under *Settings → Optional models → Image work*. Redraw now rolls again, so a post is no longer stuck with code drawing. Charts, diagrams, screenshots and chart or chat-style memes stay code-drawn. Retyping a painted meme's *Words* paints it again.
 - **Image credits name only the model** ("Made with Claude Opus 5.5"), not the drawing tool. A chart credited "+ Vega-Lite" could sit under a post whose code used matplotlib; a hands-on slot that falls back to a plain chart also no longer carries a brief that names another plotting library.
 - **Up to 22 images per post.** Room for an opener, a closing meme and a top-20 list in between. The Images sliders now go to 22 (they stopped at 12).

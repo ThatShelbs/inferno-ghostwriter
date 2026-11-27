@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from inferno_ghostwriter.config import Settings
 from inferno_ghostwriter.images.base import thumbnail_png
+from inferno_ghostwriter.images.kinds import KINDS
 from inferno_ghostwriter.llm import LLM, LLMError, SystemBlock
 from inferno_ghostwriter.llm.base import LLMImagesUnsupportedError, UsageSink
 from inferno_ghostwriter.prompts import raw, render
@@ -189,14 +190,9 @@ BY_ID = {(t.dimension, t.id): t for t in TWEAKS}
 HOUSE = ("inferno", "magma", "viridis")
 
 # Where each dimension makes sense. A chart has no cast; a code-drawn template has no staging.
+# Each kind's dimensions live in the kind table (``images/kinds.py``).
 KIND_DIMENSIONS: dict[str, tuple[str, ...]] = {
-    "hero": (PALETTE, CAST, STAGING, MEDIUM),
-    "illustration": (PALETTE, CAST, STAGING, MEDIUM),
-    "meme": (PALETTE, CAST),
-    "icon": (PALETTE, MEDIUM),
-    "diagram": (PALETTE, STAGING),
-    "screenshot": (PALETTE,),
-    "chart": (PALETTE,),
+    **{kind: spec.remix for kind, spec in KINDS.items() if spec.remix},
     # Opening styles (the hero's room): the style decides what is meaningful to vary.
     "opening:editorial": (PALETTE, CAST, STAGING, MEDIUM),
     "opening:data_art": (PALETTE, STAGING, MEDIUM),
@@ -351,6 +347,12 @@ def variation_for(art: Any, allowed: tuple[str, ...] | None = None, *, kind: str
         return ""
     tweaks = [t for t in art.tweaks if allowed is None or t.dimension in allowed]
     return variation_text(art.improvement, tweaks, kind=kind)
+
+
+def plan_from_fix(fix: str) -> ImprovementPlan:
+    """The judge's stored change for a picture, as a redraw plan: the first Redraw needs no critique call of its own."""
+    fix = fix.strip()
+    return ImprovementPlan(weakness=fix, improvements=[fix], keep=["Everything the change above does not touch."], fresh_angle="")
 
 
 def to_remix(plan: ImprovementPlan | None, tweaks: list[Tweak], previous: dict[str, Any] | None) -> dict[str, Any]:

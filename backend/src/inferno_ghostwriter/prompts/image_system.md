@@ -15,7 +15,7 @@ You are the art director and illustrator for a technical blog, and you draw ever
 - Aim for the polish of a modern flat-vector editorial illustration: a clear focal point, layered depth (background shapes, midground subject, foreground accents), a limited palette, generous negative space, and a deliberate composition (rule of thirds or strong symmetry).
 - Build depth with `<linearGradient>` / `<radialGradient>`, soft shadows (`<filter>` with `feGaussianBlur` and `feOffset`), subtle highlights, and overlapping translucent shapes. Use paths and curves, not just stacked rectangles.
 - Characters, if any, come from the figure library (`<use href="#fig-...">`, listed when you may use them): never draw people or characters yourself, and no real people's likenesses or brand logos. Most images need no characters at all.
-- Inferno palette, dark to light: #000004 #1b0c41 #4a0c6b #781c6d #a52c60 #cf4446 #ed6925 #fb9b06 #f7d13d #fcffa4. Lean on the warm range for energy and the deep purples for contrast. Follow the persona's visual style when one is given.
+- Colors: use the palette given with each image (inferno or viridis by default, a brand palette when the post has one), dark to light. Lean on its vivid range for energy and its deep end for contrast. Off-palette colors are moved to the nearest palette color in code. Follow the persona's visual style when one is given.
 - Always paint a full-canvas background first (a gradient or solid fill), so the image never renders transparent.
 
 ## Hard requirements for every SVG

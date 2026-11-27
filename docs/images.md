@@ -32,15 +32,21 @@ The judge is one model setting (`image_judge`, `model:effort`, default `opus:med
 
 Every image has the same action bar (`ImageCard.tsx`) and the same ideas board (`ImageRoomDialog.tsx`):
 
-- **Ideas** shows every pitch with its anchor, score and why (`ImageOut.room`: `room` opening, meme or body; `pitches`; text `slots`; `sources`; `why`). *Use this idea* draws one (`POST /api/images/{id}/redraw` with `concept`); *Try another format* draws it another way (`format`: a meme format, an opening style, or another kind for an in-body image; the choices come from `GET /api/image-formats?room=&kind=`, and the whole meme bank is open to the opening image); an optional steer in your own words goes with any of them (`note`).
+- **Ideas** (the writers' room board) is the main place to steer an image. Every image but a hands-on data viz has one, even with no pitches yet (it then offers *Pitch ideas*). `ImageOut.room` carries `room` (opening, meme or body), `pitches`, text `slots`, `sources`, `why` and `suggested` formats.
+  - The board shows the idea **on show** first, then ideas **not drawn yet** (newest round first, best first), then ideas **drawn before** with the picture they made. Clicking that picture brings the version back with no model call. Ruled-out ideas are folded away.
+  - **Use this one** draws that idea exactly as written: no critique and no random twist (`concept`, plus `pitch_hook`; the server answers 409 when the board changed since it was opened). A picked meme is drawn by code with no model call at all.
+  - **Adjust** edits the idea's line, picture and (for a meme) words, then draws it (`concept_edit`). The change is saved on the board (`edited`).
+  - **More like this** pitches a new round seeded by that idea. **Pitch new ideas** pitches a new round with an optional steer (quick-steer chips or your own words; `pitch: true`, `note`). **Draw next idea** draws the best idea not drawn yet without pitching (`rethink`).
+  - New rounds are **added** to the board (`images/board.py`, `batch`), never swapped in, so an index you see keeps its idea. The board holds 18; when full, the oldest ideas nobody drew make room.
+  - *Try another format* chips (a "Suggested" group first) draw it another way (`format`: a meme format, an opening style, or another kind for an in-body image; `GET /api/image-formats?room=&kind=`; the whole meme bank is open to the opening image).
 - **Finalists** swap the picture with no call to Claude.
-- **Redraw** critiques the image and draws the same idea better ([Redraw that improves](#redraw-that-improves)); **Remix** lets you choose the experiment and add a steer.
+- **Redraw** is one click: the same idea, drawn better ([Redraw that improves](#redraw-that-improves)). The caret beside it opens **Redraw options**: quick steers, your own note, *Experiment with…* (pin colours, cast, staging, medium), *Critique first*, the model, and the **style reference** (*make it like this*: `POST`/`DELETE /api/images/{id}/reference`, `ProjectImage.reference`, `ImageOut.reference_url`; the designer and the judge see it on every later draw; it steers the look, never the content). Remix is folded into Redraw options.
+- **Undo** appears after any new version (a redraw, edit, pick, upload or words change) and brings the previous one back (`revert`, no model call).
 - **Edit** changes it by instruction ("make the arrows orange"); the rest stays.
 - **Words** retypes the text of a code-drawn image (memes, opening templates; `PUT /api/images/{id}/words`) with no call to Claude. Numbers and sources cannot be changed this way.
-- **Style reference** (on the Ideas board): *make it like this*. Attach any image whose look you want (`POST`/`DELETE /api/images/{id}/reference`, stored as `ProjectImage.reference`, shown from `ImageOut.reference_url`). The designer and the judge both see it on every later draw of that image; it steers the look, never the content.
 - **Builds on**, **Replace**, **Versions**, caption, credit and alt text: see [below](#redraw-new-idea-replace-versions).
 
-The card also shows *Why the judge picked this one* and what the last redraw tried.
+Every action is disabled from the click on (no double jobs), says what it is doing ("Drawing: …", "Pitching new ideas…"), and shows a refused request on the card. The card also shows *Why the judge picked this one*, what the last redraw tried and whether a style reference is on.
 
 ## Opening images
 
@@ -170,8 +176,8 @@ Chart jokes are captioned *(data: entirely made up)*. The meme's state (`Project
 
 ## Colours, rendering and lint
 
-- **Schemes** (`images/palettes.py`, the only source of opener, meme and diagram colours). A `Scheme` is one ramp (inferno, magma or viridis) on one surface (white, gray or near-black). A new image's scheme rotates against the author's recent images, a brand kit palette wins, and a remix palette for an opener or meme offers only the house ramps (`remix.HOUSE`). `snap_svg`/`snap_tree` move every colour in model-drawn SVG to the nearest scheme colour. The scheme is stored in the image state as `scheme` (`"ramp:surface"`).
-- **Lint** (`images/lint.py`) checks model SVG for free before any judge sees it: it removes shapes entirely off the canvas and lone stray marks, and repairs dead references (a missing paint becomes a scheme colour; a missing filter, clip or `<use>` is dropped). Too many shapes and text outside the crop band go back to the designer through `draw_with_retry`.
+- **Schemes** (`images/palettes.py`, the only source of opener, meme, diagram and chart colours). A `Scheme` is one ramp (inferno, magma or viridis) on one surface (white, gray or near-black). The house favourites are **inferno and viridis** (`FAVORED`): a new image's scheme takes turns between them against the author's recent images, and magma joins only now and then (`MAGMA_CHANCE`, after both favourites were just used), so posts vary without locking in. In-body images and charts use the opener's ramp when it is a favourite, else a favourite chosen per post (`favored_ramp`); charts take their category and ramp colours from the scheme (`Scheme.chart_colors`, `render.prepare_vega_spec(scheme=)`). A brand kit palette wins, and a remix palette for an opener or meme offers only the house ramps (`remix.HOUSE`). `snap_svg`/`snap_tree` move every colour in model-drawn SVG to the nearest scheme colour. The scheme is stored in the image state as `scheme` (`"ramp:surface"`).
+- **Lint** (`images/lint.py`; which kinds get it is in the kind table, `KindSpec.lint`: colour-snapped for illustrations, diagrams and icons, structure only for screenshot mocks, which keep their own greys) checks model SVG for free before any judge sees it: it removes shapes entirely off the canvas and lone stray marks, and repairs dead references (a missing paint becomes a scheme colour; a missing filter, clip or `<use>` is dropped). Too many shapes and text outside the crop band go back to the designer through `draw_with_retry`.
 - **Rendering.** SVG is parsed with `lxml` and sanitized (no scripts, event handlers, `foreignObject` or external references), then rasterized locally by **resvg**. Charts are declarative Vega-Lite (remote data URLs are rejected), rendered by **vl-convert**; a brand palette of three or more colours becomes the chart's colour scheme, and a chart with made-up numbers says *Illustrative data* under its title. A design that cannot be drawn is sent back once with the error quoted (`images/base.draw_with_retry`); a bare `&` or an unclosed tag is repaired first (`render.parse_xml`).
 - **Fonts** are bundled in `images/memes/fonts/` (Anton, Inter, Comic Neue and JetBrains Mono, all SIL Open Font License), so images look the same on every machine.
 
@@ -205,9 +211,11 @@ One failed image never fails the post: it shows its error and a **Redraw** butto
 
 - **Edit**: Claude gets the current design (SVG, chart spec, filled template, data-art settings or meme staging) and changes only what you describe (`POST /api/images/{id}/edit`, `prompts/image_edit.md`). Your edits are remembered (`ProjectImage.edits`): a later **Redraw** or **Remix** builds on the edited picture and applies only the new look. Picking another idea, style or format, *New idea*, or an upload starts over.
 - **Redraw**: makes the image better, not just different. See below.
-- **New idea**: the next untried pitch, or fresh pitches once all are used.
-- **Builds on**: draw this image from an earlier one so both share data, colours and shapes. See *Images that build on each other*.
-- **Replace**: upload your own image (PNG, JPEG, WebP, ...; converted to PNG).
+- **Draw next idea**: the next untried pitch, or a new round once all are used.
+- **Builds on**: draw this image from an earlier one (a drawn image or your upload) so both share data, colours and shapes. See *Images that build on each other*.
+- **Replace**: upload your own image (PNG, JPEG, WebP, ...; converted to PNG). The upload clears the old finalists and twist; the board keeps its pitches (none is "on show") and has no *Words*. Your picture stays fully usable (`ImageService._adopt`, one call):
+  - **Edit** and **Redraw** recreate it from the picture itself. With ChatGPT signed in, an illustration, icon, opening image or meme is changed directly by GPT image generation (shown the upload). Otherwise Claude redraws it as SVG, or a chart as Vega-Lite with the values read off the picture (`prompts/image_adopt.md`), in the post's colours. From then on it is a normal drawn image.
+  - **Builds on** may use it as the base: the later image is shown your picture.
 - **Versions**: every version is kept; click one to restore it.
 
 ## Redraw that improves
@@ -223,7 +231,8 @@ One failed image never fails the post: it shows its error and a **Redraw** butto
 
 - `choose_tweaks` picks the experiments with no model call, from the dimensions that suit the image (`remix_dimensions`), skipping what the last eight redraws tried (`ProjectImage.remix["recent"]`). A brand-kit palette is never replaced at random; a palette you pin in **Remix** is.
 - `POST /api/images/{id}/redraw` takes `tweaks` (`{"palette": "viridis", "cast": "dogs"}`), `improve` (false = only the twist) and `note` (your steer). `GET /api/remix-options` lists the catalog.
-- Picking a stored idea or a format skips the critique: you chose the idea. **Redraw all images** redraws plainly, with no critique and no experiments. A failed critique never fails the redraw.
+- Picking a stored idea or a format, *Draw next idea* and a new round draw what you chose as it is: no critique and no experiment. **Builds on** and **Redraw all images** redraw plainly too. A failed critique never fails the redraw.
+- **The judge's fix is not wasted.** When the room's judge names a fix that was not applied (the picture scored well enough), it is kept (`Drawn.fix`, the finalist's `fix`, `ProjectImage.remix["pending_fix"]`), and the first Redraw uses it as its plan with no critique call (`remix.plan_from_fix`). Later redraws critique the new picture. The critique also runs only when the redraw draws the picture on show again (`ImageService._redraws_current`).
 
 ## Images that build on each other
 
@@ -232,13 +241,13 @@ Two images that tell one story (a single fitted line, then the same points split
 - The planner sets `builds_on` on an image slot to the id of the earlier image it extends (`ImageSlot.builds_on`); `normalize_slots` keeps only links to an earlier image still in the post.
 - The later image waits for the earlier one, then is designed with that image's source in the prompt (`ImageService._builds_on`): a chart copies the base chart's data rows, scales, colours and size; other kinds reuse the palette, shapes, labels and layout.
 - **Builds on** on the card links or unlinks an image (`POST`/`DELETE /api/images/{id}/build-on`). Redrawing the earlier image offers **Redraw them to match** (`POST /api/images/{id}/redraw-dependents`).
-- The opening image and the closing meme stand on their own, and uploads cannot be built on.
+- The opening image and the closing meme stand on their own. An upload can be a base: the later image is shown the picture (`ImageService._upload_base`). Building on is drawn with no random twist (it would fight "same colours as the base").
 
 ## Text that follows the image
 
 An image and the sentences around it should agree (`writer/image_text.py`, `writer/add_image.py`).
 
-**After a redraw, the text is checked.** When Redraw, *New idea*, another idea or format, **Edit** or *Redraw all* changes what an image is, the same job asks Claude for small find/replace edits to any sentence that described the old picture (`prompts/image_text_sync.md`), given what each image was and is now (`describe_image`). Most redraws change nothing. When text changes, the card shows a note and **Undo last change** reverts it (`Project.revisions`, kind `image`). The check never fails a redraw (`text_error`), is skipped while another text job runs, and does not run for uploads, version restores, finalist picks, **Words** or a feedback tweak's own redraws.
+**After a redraw, the text is checked when the image changed what it is.** The check runs only when the idea on show, the format or the meme's words changed, or an **Edit** changed the caption (`describe_image(..., substance=True)` leaves out the alt text and caption, which every redraw rewords). A plain Redraw of the same idea makes no text call. When another idea or format, **Edit** or *Redraw all* changes what an image is, the same job asks Claude for small find/replace edits to any sentence that described the old picture (`prompts/image_text_sync.md`), given what each image was and is now (`describe_image`). Most redraws change nothing. When text changes, the card shows a note and **Undo last change** reverts it (`Project.revisions`, kind `image`). The check never fails a redraw (`text_error`), is skipped while another text job runs, and does not run for uploads, version restores, finalist picks, **Words** or a feedback tweak's own redraws.
 
 **Add an image at a highlight.** Highlight text in the Preview (or the Markdown editor) and click **Add image** (`POST /api/projects/{id}/images`, job `add_image`). Claude (`prompts/image_add.md`) picks the kind, what it shows, the paragraph or sentence it follows and any adjacent sentence to change. Code picks a safe break (`place_placeholder`: never inside a code block, list, table or quote, never between a lead-in and its example, never after the closing meme), adds the next `imgN` slot to the plan and puts the row in reading order. At most 22 images per post. **Undo last change** takes the image and its text edits out together.
 
@@ -279,6 +288,23 @@ uv run python evals/image_quality.py --yes    # real openers and memes for eight
 ```
 
 Each run writes a contact sheet with the finalists, the judge's readings, scores and fixes, and seconds per image, and saves `results.json`, so two runs can be compared before and after a change.
+
+### What each action costs
+
+```bash
+uv run python scripts/usage_report.py --actions   # free: every card action once on a demo post, through the real API
+```
+
+It prints the model calls each card action makes (Redraw, Redraw options, each Ideas action, Edit, Words, finalist pick, Replace, editing and redrawing an upload, Builds on, Undo). Run it before and after a change that touches the image flow. `tests/api/test_image_actions.py` pins the budgets that matter:
+
+- a picked meme idea makes no drawing call, and a picked in-body idea makes one
+- a plain Redraw makes no text call
+- the first Redraw after a fresh run uses the judge's saved fix
+- editing or redrawing an upload takes one call
+
+## The kind table
+
+`images/kinds.py` (`KindSpec`, `KINDS`) is the one place per-kind rules live: label, room, whether GPT may paint it and at what size, render width, lint mode, what it may be redrawn as, and what a redraw may vary. `body.PAINTABLE`, `body.KIND_OPTIONS`, `remix.KIND_DIMENSIONS` and `api.image_room.KIND_LABELS` are views of it, and `ImageOut.kind_label` sends the label to the app. To add a kind, add it to `writer.schemas.ImageKind` and `KINDS`, then teach its room to draw it.
 
 ## Adding a style or template
 

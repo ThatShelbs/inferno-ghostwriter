@@ -108,4 +108,7 @@ class Drawn:
     label: str = ""
     score: float | None = None
     reads_as: str = ""
+    # The judge's one change for this picture when it was not applied yet: the first Redraw uses it instead of a
+    # new critique call ("" when there is none, or it was already applied as a refine).
+    fix: str = ""
     finalists: list[Drawn] = field(default_factory=list)

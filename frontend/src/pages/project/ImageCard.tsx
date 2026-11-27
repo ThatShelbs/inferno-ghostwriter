@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, Sparkles, Type, Wand2 } from 'lucide-react'
+import { ChevronDown, Dices, History, ImagePlus, Layers, Lightbulb, PencilLine, Type, Undo2, Wand2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { Link } from 'react-router'
 
@@ -9,14 +9,14 @@ import type { ImageOut } from '../../api/types.gen'
 import { useJob } from '../../api/useJob'
 import { Badge, Button, Notice, Spinner } from '../../components/ui'
 import { fullCaption } from '../../lib/article'
-import { KIND_LABEL } from '../../lib/imageRoom'
 import { cx } from '../../lib/cx'
+import { kindLabel } from '../../lib/imageRoom'
 import { buildOnChoices, dependentsOf, remixTwists } from '../../lib/remix'
 import { textSyncNote, type TextSyncNote } from '../../lib/textSync'
 import { FinalistStrip } from './FinalistStrip'
 import { BuildOnDialog, CaptionDialog, EditDialog, VersionsDialog } from './ImageDialogs'
-import { ImageRoomDialog } from './ImageRoomDialog'
-import { RemixDialog } from './RemixDialog'
+import { ImageRoomDialog, type PitchEdit } from './ImageRoomDialog'
+import { RedrawDialog } from './RedrawDialog'
 import { WordsDialog } from './WordsDialog'
 
 /** How a hands-on image names the library its code is about (the server sends the import name). */
@@ -30,11 +30,12 @@ const HANDS_ON_LIBRARY: Record<string, string> = {
   pandas: 'pandas',
 }
 
-type Open = 'ideas' | 'remix' | 'words' | 'edit' | 'caption' | 'versions' | 'build' | null
+type Open = 'ideas' | 'redraw' | 'words' | 'edit' | 'caption' | 'versions' | 'build' | null
 
 /**
- * One image in the post. Every image, whatever its kind, has the same tools: Ideas (its room), Redraw, Remix, Edit,
- * Words (when it has text), Replace, Versions, Builds on (in-body images) and Caption, plus the finalist strip.
+ * One image in the post. Every image, whatever its kind, has the same tools: Ideas (its room), Redraw (one click, or
+ * with options), Edit, Words (when it has text), Replace, Versions, Builds on (in-body images) and Caption, plus the
+ * finalist strip. An upload has them too: it is recreated from its picture when it is edited or redrawn.
  */
 export function ImageCard({ projectId, image, images = [] }: { projectId: number; image: ImageOut; images?: ImageOut[] }) {
   const qc = useQueryClient()
@@ -46,20 +47,42 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
   const [textNote, setTextNote] = useState<TextSyncNote | null>(null)
   // Set when a redraw of this image leaves the images that build on it drawn from its old version.
   const [unmatched, setUnmatched] = useState(false)
+  // What the running job is doing, in the author's words ("Drawing that idea…").
+  const [action, setAction] = useState('')
+  // A new version was just made: one click brings the previous one back (no model call).
+  const [undoable, setUndoable] = useState(false)
   const job = useJob(jobId, (state) => {
     setJobId(null)
     setTextNote(textSyncNote(state))
     setUnmatched(((state.result?.dependents as string[] | undefined) ?? []).length > 0)
+    setUndoable(state.status === 'succeeded')
     void qc.invalidateQueries({ queryKey: keys.project(projectId) })
   })
-  const busy = !!jobId || mutations.upload.isPending || mutations.pick.isPending
-  const drawn = !['upload', 'placeholder', ''].includes(image.provider)
+  const tracked = [
+    mutations.redraw,
+    mutations.edit,
+    mutations.buildOn,
+    mutations.matchDependents,
+    mutations.upload,
+    mutations.pick,
+    mutations.revert,
+    mutations.words,
+    mutations.setReference,
+    mutations.clearReference,
+    mutations.update,
+  ]
+  // Busy from the click on (not only once a job runs), so a double click never starts two jobs.
+  const busy = !!jobId || tracked.some((m) => m.isPending)
+  // Any refused request is shown on the card (a refused redraw used to vanish).
+  const failed = tracked.find((m) => m !== mutations.words && m.error)
+  const clearErrors = () => tracked.forEach((m) => m.reset())
+  const upload = image.provider === 'upload'
+  const editable = !['placeholder', ''].includes(image.provider)
   const room = image.room ?? null
   const formats = useImageFormats(room?.room ?? 'body', image.kind, open === 'ideas' && !!room)
-  const remixOptions = useRemixOptions(open === 'remix')
+  const remixOptions = useRemixOptions(open === 'redraw')
   // A hands-on data viz picture is whatever the code above it draws: no pitches, remixes or words, just rerun and edit the code.
   const handsOn = image.kind === 'hands_on_viz'
-  const canRemix = drawn && !handsOn && (image.remix_dimensions ?? []).length > 0
   const needsCodeSetting = handsOn && image.status === 'error' && /run example code/i.test(image.error ?? '')
   // Images that build on each other share one source, so they look like the same data taken further.
   const bases = buildOnChoices(image, images)
@@ -67,14 +90,26 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
   const dependents = dependentsOf(image, images)
   const nameOf = (slotId: string) => {
     const other = images.find((i) => i.slot_id === slotId)
-    return other ? `${KIND_LABEL[other.kind] ?? other.kind} "${other.caption || other.purpose}"` : slotId
+    return other ? `${kindLabel(other)} "${other.caption || other.purpose}"` : slotId
   }
-  const redraw = (rethink: boolean, picks: RedrawPicks = {}) => {
+  const started = (label: string) => (j: { id: string }) => {
+    setAction(label)
+    setUndoable(false)
+    setJobId(j.id)
+  }
+  const redraw = (rethink: boolean, picks: RedrawPicks = {}, label = upload ? 'Recreating your picture…' : 'Redrawing…') => {
     setOpen(null)
-    mutations.redraw.mutate({ id: image.id, rethink, ...picks }, { onSuccess: (j) => setJobId(j.id) })
+    clearErrors()
+    mutations.redraw.mutate({ id: image.id, rethink, ...picks }, { onSuccess: started(label) })
+  }
+  const restore = (index: number) => {
+    setOpen(null)
+    clearErrors()
+    setAction('Bringing that version back…')
+    mutations.revert.mutate({ id: image.id, index }, { onSuccess: () => setUndoable(index !== image.history.length - 2) })
   }
   const slots = room?.slots ?? []
-  const label = image.kind === 'hero' && room?.format_label ? `Opening image · ${room.format_label}` : (KIND_LABEL[image.kind] ?? image.kind)
+  const label = image.kind === 'hero' && room?.format_label ? `Opening image · ${room.format_label}` : kindLabel(image)
 
   return (
     <figure className="group my-8 font-sans not-italic">
@@ -95,13 +130,13 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
         {busy && (
           <div className="absolute inset-0 flex items-center justify-center">
             <span className="rounded-full bg-surface px-4 py-2 shadow">
-              <Spinner label={job.message || 'Redrawing…'} />
+              <Spinner label={(jobId && job.message) || action || 'Working…'} />
             </span>
           </div>
         )}
         {image.kind !== 'hero' && (
           <div className="absolute top-2 left-2">
-            <Badge tone="accent">{label}</Badge>
+            <Badge tone="accent">{upload ? `${label} · your picture` : label}</Badge>
           </div>
         )}
       </div>
@@ -136,14 +171,23 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
       {handsOn && image.hands_on?.stale && !busy && (
         <div className="mt-2">
           <Notice tone="warn" title="The code above changed since this picture was made">
-            <Button size="sm" variant="secondary" className="mt-2" icon={<Dices className="size-4" />} onClick={() => redraw(false)}>
+            <Button size="sm" variant="secondary" className="mt-2" icon={<Dices className="size-4" />} onClick={() => redraw(false, {}, 'Running the code…')}>
               Rerun code
             </Button>
           </Notice>
         </div>
       )}
       {job.status === 'failed' && <Notice tone="error">{job.error}</Notice>}
-      {mutations.upload.error && <Notice tone="error">{errorText(mutations.upload.error)}</Notice>}
+      {failed?.error && <Notice tone="error">{errorText(failed.error)}</Notice>}
+      {undoable && !busy && image.history.length > 1 && (
+        <p className="mt-1 text-center text-xs text-muted" aria-label="Undo">
+          New version on show.{' '}
+          <button type="button" className="inline-flex items-center gap-0.5 font-semibold underline" onClick={() => restore(image.history.length - 2)}>
+            <Undo2 className="size-3" aria-hidden />
+            Undo
+          </button>
+        </p>
+      )}
       {textNote && !busy && (
         <div className="mt-2">
           <Notice tone={textNote.tone} title="Text updated to match">
@@ -157,6 +201,7 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           {remixTwists(image.remix) ? `Tried ${remixTwists(image.remix)}.` : ''}
         </p>
       )}
+      {image.reference_url && !busy && <p className="mt-1 text-center text-xs text-muted">Style reference on: every draw aims for its look.</p>}
       {base && <p className="mt-1 text-center text-xs text-muted">Builds on the {nameOf(base.slot_id)}: same data and look, taken further.</p>}
       {unmatched && dependents.length > 0 && !busy && (
         <div className="mt-2">
@@ -174,7 +219,7 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
                 mutations.matchDependents.mutate(image.id, {
                   onSuccess: (j) => {
                     setUnmatched(false)
-                    setJobId(j.id)
+                    started('Redrawing the images that build on it…')(j)
                   },
                 })
               }
@@ -210,53 +255,64 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
         <p className="mt-2 text-center text-xs text-muted">Claude drew this mock screen. Use Replace if you have the real screenshot.</p>
       )}
 
-      <div className="mt-3 flex flex-wrap justify-center gap-2" aria-label={`Actions for ${KIND_LABEL[image.kind] ?? 'image'}`}>
+      <div className="mt-3 flex flex-wrap justify-center gap-2" aria-label={`Actions for ${kindLabel(image)}`}>
         {!handsOn && (
           <Button
             size="sm"
             variant="secondary"
             icon={<Lightbulb className="size-4" />}
-            onClick={() => (room ? setOpen('ideas') : redraw(true))}
+            onClick={() => (room ? setOpen('ideas') : redraw(true, { pitch: true }, 'Pitching ideas…'))}
             disabled={busy}
-            title="Every idea pitched for this image: pick one, pitch new ones with a steer, or try another format"
+            title="Every idea pitched for this image: pick one, adjust one, pitch new ones or try another format"
           >
             Ideas
           </Button>
         )}
-        <Button
-          size="sm"
-          variant="secondary"
-          icon={<Dices className="size-4" />}
-          onClick={() => redraw(false)}
-          disabled={busy}
-          title={
-            handsOn
-              ? 'Run the code above again and keep the chart it draws'
-              : 'Claude critiques this image, then redraws the same idea to fix its weakest point'
-          }
-        >
-          {handsOn ? 'Rerun code' : 'Redraw'}
-        </Button>
-        {canRemix && (
+        <span className="inline-flex">
           <Button
             size="sm"
             variant="secondary"
-            icon={<Sparkles className="size-4" />}
-            onClick={() => setOpen('remix')}
+            icon={<Dices className="size-4" />}
+            className={handsOn ? undefined : 'rounded-r-none'}
+            onClick={() => redraw(false, {}, handsOn ? 'Running the code…' : undefined)}
             disabled={busy}
-            title="Choose what the redraw experiments with, and steer it in your own words"
+            title={
+              handsOn
+                ? 'Run the code above again and keep the chart it draws'
+                : upload
+                  ? 'Draw your picture again in this post’s style (then you can edit it and build on it)'
+                  : 'Redraw the same idea, better: Claude critiques it first and fixes its weakest point'
+            }
           >
-            Remix
+            {handsOn ? 'Rerun code' : 'Redraw'}
           </Button>
-        )}
-        {(drawn || handsOn) && (
+          {!handsOn && (
+            <Button
+              size="sm"
+              variant="secondary"
+              className="rounded-l-none border-l-0 px-1.5"
+              icon={<ChevronDown className="size-4" />}
+              onClick={() => setOpen('redraw')}
+              disabled={busy}
+              aria-label="Redraw options"
+              title="Steer the redraw, pin what it experiments with, or add a style reference"
+            />
+          )}
+        </span>
+        {(editable || handsOn) && (
           <Button
             size="sm"
             variant="secondary"
             icon={<Wand2 className="size-4" />}
             onClick={() => setOpen('edit')}
             disabled={busy}
-            title={handsOn ? 'Tell Claude what to change in the code; it updates the post and runs it again' : 'Tell Claude what to change; the rest stays'}
+            title={
+              handsOn
+                ? 'Tell Claude what to change in the code; it updates the post and runs it again'
+                : upload
+                  ? 'Say what to change in your picture; it is recreated with the change'
+                  : 'Tell Claude what to change; the rest stays'
+            }
           >
             {handsOn ? 'Edit code' : 'Edit'}
           </Button>
@@ -276,11 +332,18 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
             Words
           </Button>
         )}
-        <Button size="sm" variant="secondary" icon={<ImagePlus className="size-4" />} onClick={() => fileInput.current?.click()} disabled={busy}>
+        <Button
+          size="sm"
+          variant="secondary"
+          icon={<ImagePlus className="size-4" />}
+          onClick={() => fileInput.current?.click()}
+          disabled={busy}
+          title="Use your own picture; you can still edit it, redraw it and build on it"
+        >
           Replace
         </Button>
         {image.history.length > 1 && (
-          <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setOpen('versions')}>
+          <Button size="sm" variant="ghost" icon={<History className="size-4" />} onClick={() => setOpen('versions')} disabled={busy}>
             Versions ({image.history.length})
           </Button>
         )}
@@ -299,7 +362,7 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
             Builds on
           </Button>
         )}
-        <Button size="sm" variant="ghost" icon={<PencilLine className="size-4" />} onClick={() => setOpen('caption')}>
+        <Button size="sm" variant="ghost" icon={<PencilLine className="size-4" />} onClick={() => setOpen('caption')} disabled={busy}>
           Caption
         </Button>
         <input
@@ -310,7 +373,11 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           aria-label="Upload replacement image"
           onChange={(e) => {
             const file = e.target.files?.[0]
-            if (file) mutations.upload.mutate({ id: image.id, file })
+            if (file) {
+              clearErrors()
+              setAction('Uploading your picture…')
+              mutations.upload.mutate({ id: image.id, file }, { onSuccess: () => setUndoable(true) })
+            }
             e.target.value = ''
           }}
         />
@@ -322,12 +389,13 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           onClose={() => setOpen(null)}
           room={room}
           formats={formats.data ?? []}
-          onPick={(index, model) => redraw(false, { concept: index, model })}
-          onPitch={(note, model) => redraw(true, { note, model })}
-          onFormat={(id, note, model) => redraw(false, { format: id, note, model })}
-          referenceUrl={image.reference_url}
-          onReference={(file) => mutations.setReference.mutate({ id: image.id, file })}
-          onClearReference={() => mutations.clearReference.mutate(image.id)}
+          onPick={(pitch, model, edit?: PitchEdit) =>
+            redraw(false, { concept: pitch.index, pitchHook: pitch.hook, conceptEdit: edit, model }, `Drawing: ${(edit?.hook || pitch.hook).slice(0, 60)}…`)
+          }
+          onNext={(model) => redraw(true, { model }, 'Drawing the next idea…')}
+          onPitch={(note, model) => redraw(true, { pitch: true, note, model }, 'Pitching new ideas…')}
+          onFormat={(id, note, model) => redraw(false, { format: id, note, model }, 'Drawing it in that format…')}
+          onRestore={restore}
           models={models}
         />
       )}
@@ -338,31 +406,52 @@ export function ImageCard({ projectId, image, images = [] }: { projectId: number
           slots={slots}
           saving={mutations.words.isPending}
           error={mutations.words.error ? errorText(mutations.words.error) : null}
-          onSave={(words) => mutations.words.mutate({ id: image.id, words }, { onSuccess: () => setOpen(null) })}
+          onSave={(words) =>
+            mutations.words.mutate(
+              { id: image.id, words },
+              {
+                onSuccess: () => {
+                  setOpen(null)
+                  setUndoable(true)
+                },
+              },
+            )
+          }
         />
       )}
-      {open === 'remix' && (
-        <RemixDialog
+      {open === 'redraw' && (
+        <RedrawDialog
           open
           onClose={() => setOpen(null)}
           image={image}
           dimensions={remixOptions.data ?? []}
-          onRemix={(tweaks, improve, note, model) => redraw(false, { tweaks, improve, note, model })}
+          onRedraw={(tweaks, improve, note, model) => redraw(false, { tweaks, improve, note, model })}
           models={models}
+          referenceUrl={image.reference_url}
+          onReference={(file) => mutations.setReference.mutate({ id: image.id, file })}
+          onClearReference={() => mutations.clearReference.mutate(image.id)}
         />
       )}
       {open === 'build' && (
         <BuildOnDialog
           image={image}
           bases={bases}
-          labelOf={(other) => `${KIND_LABEL[other.kind] ?? other.kind}: ${other.caption || other.purpose}`}
+          labelOf={(other) => `${kindLabel(other)}${other.provider === 'upload' ? ' (your picture)' : ''}: ${other.caption || other.purpose}`}
           mutations={mutations}
           onClose={() => setOpen(null)}
-          onJob={setJobId}
+          onJob={(id) => started('Building on it…')({ id })}
         />
       )}
       {open === 'versions' && <VersionsDialog image={image} mutations={mutations} onClose={() => setOpen(null)} />}
-      {open === 'edit' && <EditDialog image={image} mutations={mutations} onClose={() => setOpen(null)} onJob={setJobId} models={models} />}
+      {open === 'edit' && (
+        <EditDialog
+          image={image}
+          mutations={mutations}
+          onClose={() => setOpen(null)}
+          onJob={(id) => started(upload ? 'Recreating your picture with the change…' : 'Editing…')({ id })}
+          models={models}
+        />
+      )}
       {open === 'caption' && <CaptionDialog image={image} mutations={mutations} onClose={() => setOpen(null)} />}
     </figure>
   )

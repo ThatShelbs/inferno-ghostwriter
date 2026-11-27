@@ -654,16 +654,24 @@ def test_meme_ideas_board_and_word_editing_need_no_claude(client: TestClient, sa
 
     assert client.post(f"{url}/redraw", json={"format": "terminal"}).json()["status"] == "succeeded"
     info = current()["room"]
-    assert len(info["pitches"]) == 6 and info["pitches"][0]["current"] and info["fallback_from"] == ""
-    assert info["pitches"][0]["words"][0] == "zsh - dashboards"
+    # The new round in that format joins the board; the earlier jokes stay (same indexes) for one-click picks.
+    newest = max(p["batch"] for p in info["pitches"])
+    new = [p for p in info["pitches"] if p["batch"] == newest]
+    assert len(info["pitches"]) == 12 and len(new) == 6 and {p["format"] for p in new} == {"terminal"}
+    shown = next(p for p in info["pitches"] if p["current"])
+    assert shown in new and info["fallback_from"] == ""
+    assert shown["words"][0] == "zsh - dashboards"
     assert {s["name"]: s["text"] for s in info["slots"]}["out3"] == "fatal: everyone was in that meeting"
 
+    other = next(p["index"] for p in new if not p["current"])
     fake_llm.calls.clear()
-    assert client.post(f"{url}/redraw", json={"concept": 4}).json()["status"] == "succeeded"
-    assert current()["room"]["pitches"][4]["current"] is True
+    assert client.post(f"{url}/redraw", json={"concept": other}).json()["status"] == "succeeded"
+    assert current()["room"]["pitches"][other]["current"] is True
     # A different joke is a changed image, so the text around it is checked; the ideas board itself pitches nothing.
     assert "meme ideas" not in fake_llm.tasks() and fake_llm.tasks().count("image text sync") <= 1
-    assert client.post(f"{url}/redraw", json={"concept": 9}).status_code == 422
+    assert client.post(f"{url}/redraw", json={"concept": 99}).status_code == 422
+    # A board opened before the ideas changed is refused rather than drawing a different idea.
+    assert client.post(f"{url}/redraw", json={"concept": other, "pitch_hook": "an old hook"}).status_code == 409
     # An in-body image has the same board: pick another of its ideas.
     assert client.post(f"/api/images/{diagram['id']}/redraw", json={"concept": 3}).json()["status"] == "succeeded"
 

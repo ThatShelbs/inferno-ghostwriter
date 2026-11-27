@@ -18,7 +18,7 @@ from inferno_ghostwriter.api.schemas import (
     WordSlotOut,
 )
 from inferno_ghostwriter.db import ProjectImage
-from inferno_ghostwriter.images import handson
+from inferno_ghostwriter.images import handson, kinds
 from inferno_ghostwriter.images.body import KIND_OPTIONS
 from inferno_ghostwriter.images.memes import FAMILIES, FORMATS, get_format, load_state
 from inferno_ghostwriter.images.memes.generate import panel_scores
@@ -30,22 +30,12 @@ from inferno_ghostwriter.images.opening.styles import STYLES, get_style
 from inferno_ghostwriter.images.opening.templates import get_template, slot_texts
 from inferno_ghostwriter.images.service import is_meme, meme_spec, remix_dimensions
 
-KIND_LABELS = {
-    "illustration": "Illustration",
-    "diagram": "Diagram",
-    "chart": "Chart",
-    "screenshot": "Screenshot mock",
-    "icon": "Icon",
-    "hands_on_viz": "Hands-on data viz",
-}
-KIND_USE = {
-    "illustration": "An illustrated metaphor or scene for the idea.",
-    "diagram": "A clean diagram: flow, layers, rings, matrix, before/after.",
-    "chart": "A chart of the numbers (illustrative unless the post has them).",
-    "screenshot": "A drawn mock of the screen the text describes.",
-    "icon": "A crisp icon or row of icons.",
-    "hands_on_viz": "The chart the code right above it draws, made by running that code.",
-}
+# Views of the kind table (``images/kinds.py``) for in-body images.
+_LISTED = (*kinds.BODY_KINDS, "hands_on_viz")
+KIND_LABELS = {k: kinds.label(k) for k in _LISTED}
+KIND_USE = {k: kinds.KINDS[k].use for k in _LISTED}
+# How many formats the board suggests.
+SUGGESTED = 4
 
 
 def image_url(image: ProjectImage) -> str | None:
@@ -78,6 +68,7 @@ def image_out(image: ProjectImage, markdown: str | None = None) -> ImageOut:
         remix=remix_info(image),
         remix_dimensions=list(remix_dimensions(image)),
         hands_on=hands_on_info(image, markdown),
+        kind_label=kinds.label(image.kind),
     )
 
 
@@ -137,13 +128,48 @@ def _score(total: Any) -> float | None:
 
 
 def room_info(image: ProjectImage) -> ImageRoomOut | None:
+    """The image's ideas board. Every image but a hands-on data viz has one, even with no pitches yet (the board then
+    offers to pitch some). On an upload the stored pitches stay pickable, but none is on show and it has no words."""
+    if image.kind == "hands_on_viz":
+        return None
     if image.kind == "hero" and (state := load_opening_state(image.spec)) is not None:
-        return _opening_room(image, state)
-    if image.kind == "meme" and (state := load_state(image.spec)) is not None:
-        return _meme_room(state)
-    if image.kind not in ("hero", "meme", "hands_on_viz") and image.provider not in ("upload", "placeholder", ""):
-        return _body_room(image)
-    return None
+        room = _opening_room(image, state)
+    elif image.kind == "meme" and (state := load_state(image.spec)) is not None:
+        room = _meme_room(state)
+    elif image.kind in ("hero", "meme"):
+        room = ImageRoomOut(room="opening" if image.kind == "hero" else "meme", format="", format_label="")
+    else:
+        room = _body_room(image)
+    _add_pictures(image, room)
+    if image.provider == "upload":
+        for pitch in room.pitches:
+            pitch.current = False
+        room.why, room.slots, room.fallback_from = "", [], ""
+    return room
+
+
+def _idea_key(text: str) -> str:
+    return " ".join(text.split()).casefold()
+
+
+def _add_pictures(image: ProjectImage, room: ImageRoomOut) -> None:
+    """Show each pitch's picture when a version of the image drew it (restoring that version costs no call), and
+    suggest the formats of the best pitches not tried yet."""
+    drawn: dict[str, int] = {}
+    for i, entry in enumerate(image.history or []):
+        key = _idea_key(str(entry.get("idea") or ""))
+        if key:
+            drawn[key] = i  # the newest version of each idea wins
+    for pitch in room.pitches:
+        version = drawn.get(_idea_key(pitch.hook or pitch.concept))
+        if version is not None:
+            pitch.version = version
+            pitch.thumb_url = f"/api/images/{image.id}/history/{version}/file"
+    ranked = sorted(
+        (p for p in room.pitches if not p.ruled_out),
+        key=lambda p: (p.tried, -(p.score if p.score is not None else 0), -p.batch, p.index),
+    )
+    room.suggested = list(dict.fromkeys(p.format for p in ranked if p.format != room.format))[:SUGGESTED]
 
 
 def _opening_room(image: ProjectImage, state: dict[str, Any]) -> ImageRoomOut:
@@ -169,6 +195,8 @@ def _opening_room(image: ProjectImage, state: dict[str, Any]) -> ImageRoomOut:
                 ruled_out=opening_ruled_out(entry),
                 tried=i in tried,
                 current=i == chosen,
+                batch=int(entry.get("batch") or 0),
+                edited=bool(entry.get("edited")),
             )
         )
     style = get_style(str(state.get("style") or ""))
@@ -232,6 +260,8 @@ def _meme_room(state: dict[str, Any]) -> ImageRoomOut:
             ruled_out=i in vetoed,
             tried=i in tried,
             current=i == chosen,
+            batch=int(c.get("batch") or 0),
+            edited=bool(c.get("edited")),
         )
         for i, c in enumerate(concepts)
         if (pitch_fmt := get_format(str(c.get("format", ""))))
@@ -264,6 +294,8 @@ def _body_room(image: ProjectImage) -> ImageRoomOut:
             reads_as=str(c.get("reads_as") or ""),
             tried=i in tried,
             current=i == chosen,
+            batch=int(c.get("batch") or 0),
+            edited=bool(c.get("edited")),
         )
         for i, c in enumerate(ideas.get("concepts") or [])
     ]

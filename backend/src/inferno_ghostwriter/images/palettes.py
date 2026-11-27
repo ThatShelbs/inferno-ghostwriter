@@ -24,6 +24,16 @@ RAMPS: dict[str, tuple[str, ...]] = {
     "viridis": ("#440154", "#482878", "#3e4989", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"),
 }
 RAMP_LABELS = {"inferno": "Inferno", "magma": "Magma", "viridis": "Viridis"}
+# The house favorites: new images take turns between these two; magma joins only now and then.
+FAVORED = ("inferno", "viridis")
+MAGMA_CHANCE = 0.25
+
+
+def favored_ramp(ramp_id: str | None, key: int = 0) -> str:
+    """``ramp_id`` when it is a favorite, else one of the favorites picked by ``key`` (a post id: stable per post,
+    varied across posts)."""
+    return ramp_id if ramp_id in FAVORED else FAVORED[key % len(FAVORED)]
+
 
 # Backgrounds: white and grays, or dark blacks.
 SURFACES: dict[str, str] = {
@@ -170,6 +180,11 @@ class Scheme:
         return self.accents[i % len(self.accents)]
 
     @property
+    def chart_colors(self) -> tuple[str, ...]:
+        """Category colors for a chart: ramp colors that read on the background, neighbors far apart."""
+        return self.accents
+
+    @property
     def deep(self) -> str:
         """A deep ramp color for dark shapes on light surfaces and frames."""
         return self.ramp[1]
@@ -244,11 +259,16 @@ def choose(
     avoid: Iterable[str] = (),
 ) -> Scheme:
     """A scheme for a new image: a pinned ramp/surface wins; otherwise the one used least recently, so a persona's
-    images rotate through inferno, magma and viridis and between light and dark backgrounds."""
+    images take turns between inferno and viridis (the house favorites) and between light and dark backgrounds.
+    Magma comes in now and then (``MAGMA_CHANCE``, once both favorites were just used), so posts never lock in."""
     rng = rng or random.Random()
     recent_ids = [r for r in recent if r]
     avoided = set(avoid)
-    ramps = [ramp] if ramp in RAMPS else list(RAMPS)
+    if ramp in RAMPS:
+        ramps = [str(ramp)]
+    else:
+        latest = {r.split(":", 1)[0] for r in recent_ids[:2]}
+        ramps = list(FAVORED) + (["magma"] if set(FAVORED) <= latest and rng.random() < MAGMA_CHANCE else [])
     if surface in SURFACES:
         surfaces = [str(surface)]
     elif dark is True:
