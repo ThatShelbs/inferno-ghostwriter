@@ -54,9 +54,10 @@ from inferno_ghostwriter.evolution import change_stage, edit_rate, start_analysi
 from inferno_ghostwriter.experiments.models import Experiment, Scenario, default_scenarios
 from inferno_ghostwriter.experiments.service import rerun as rerun_experiment
 from inferno_ghostwriter.export import PLATFORMS, Platform, build_bundle, copy_html, linkedin_post
-from inferno_ghostwriter.images import ImageProviderError, raster, to_png
+from inferno_ghostwriter.images import ImageProviderError, raster
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.opening.styles import STYLES, suggested_by_type
+from inferno_ghostwriter.images.render import upload_to_png
 from inferno_ghostwriter.jobs import JobContext
 from inferno_ghostwriter.llm import LLMError
 from inferno_ghostwriter.llm.router import image_model
@@ -984,9 +985,11 @@ async def set_reference(image_id: int, session: SessionDep, services: ServicesDe
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(413, "Images must be 15 MB or smaller.")
     try:
-        png, _, _ = to_png(data)
+        png, _, _ = upload_to_png(data)
     except Exception as exc:
-        raise HTTPException(422, "That file is not an image Inferno Ghostwriter can read.") from exc
+        raise HTTPException(
+            422, f"That file is not an image Inferno Ghostwriter can read ({type(exc).__name__}: {str(exc)[:120]})."
+        ) from exc
     return image_out(services.images.set_reference(image_id, png))
 
 
@@ -1019,9 +1022,11 @@ async def upload_image(
     if len(data) > MAX_IMAGE_BYTES:
         raise HTTPException(413, "Images must be 15 MB or smaller.")
     try:
-        png, width, height = to_png(data)
+        png, width, height = upload_to_png(data)
     except Exception as exc:
-        raise HTTPException(422, "That file is not an image Inferno Ghostwriter can read.") from exc
+        raise HTTPException(
+            422, f"That file is not an image Inferno Ghostwriter can read ({type(exc).__name__}: {str(exc)[:120]})."
+        ) from exc
     return image_out(services.images.save_upload(image_id, png, width, height, persona))
 
 
