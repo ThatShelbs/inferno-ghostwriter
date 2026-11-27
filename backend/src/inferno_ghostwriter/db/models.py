@@ -45,6 +45,8 @@ class Persona(SQLModel, table=True):
     default_formula: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, default={}))
     # How new posts open (see images.opening.styles): a style id, or "auto" = the panel picks from the styles that suit the post.
     default_opening_style: str = "auto"
+    # Styles, formats and looks to favor or avoid in every post's images ({tag_id: "prefer" | "avoid"}, see images.priorities).
+    default_image_priorities: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, default={}))
     # Interview the author (3-5 questions for the brief) before writing each new post; off = write straight away.
     default_interview: bool = False
     # Voice profile version used for new posts; None = always the latest.
@@ -134,6 +136,8 @@ class Project(SQLModel, table=True):
     revisions: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON, default=[]))
     # This post's image look (see images.brand): palette, font, motif, style; empty = the persona's visual style.
     brand_kit: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, default={}))
+    # Styles, formats and looks this post's images favor or avoid ({tag_id: "prefer" | "avoid"}); wins over the persona's.
+    image_priorities: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON, default={}))
     voice_profile_version: int | None = None
     error: str | None = None
     # Where the author is with the post: draft -> ready -> published (separate from the generation ``status``).

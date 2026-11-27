@@ -111,6 +111,12 @@ def position_guide(post: MemeContext) -> str:
             "spoilers and no callbacks to things the post explains later. Favor formats that still read as a wide thumbnail. "
             "The post closes with its own meme, so save the big payoff for the ending."
         )
+    if post.position == "body":
+        return (
+            "Pitch a meme for the middle of this post. It sits beside a passage that the brief describes, so it must "
+            "land for a reader who has just read that passage and make the point of that passage funnier or clearer, "
+            "without giving away the ending. The post still closes with its own meme."
+        )
     if post.opening:
         return (
             "Pitch the closing meme for this post. The post also opens with a meme, so this is a meme sandwich. The opener: "

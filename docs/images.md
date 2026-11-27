@@ -218,6 +218,22 @@ One failed image never fails the post: it shows its error and a **Redraw** butto
   - **Builds on** may use it as the base: the later image is shown your picture.
 - **Versions**: every version is kept; click one to restore it.
 
+## Image studio: steer every image in one place
+
+**Image studio** (right rail, under *Image brand kit*) is one dialog for the whole set of images in a post; the cards keep their own tools for one image at a time. It has two tabs.
+
+**Slots** lists every image Claude drew (uploads and hands-on charts are left alone).
+
+- **Start over** (the strip on top): *Pitch all-new ideas* (default) pitches a new round for every slot; turn it off to keep each slot's idea on show and only redraw it (optionally with the critique). A **feedback note** (with the same quick steers) goes to every pitching room, so "more like a subway map" shapes every new idea. The button reads *Start over: N images*.
+- **Each slot has its own** *Idea*, *Colors* and *Model*, and under *More* the other looks (medium, cast, staging) and a note of its own. *Idea* is *a new one* / *keep the one on show* (following the run), *the next one* (no new pitching), or any style or format the slot can be drawn as. A middle slot may be drawn as **any of the 29 meme formats** (for example "slot 2 = Exploding brain, Inferno colors"): it keeps its place and `{{image:ID}}` placeholder and becomes a meme (`kind` = `meme`, drawn by the meme room with `MemeContext.position="body"`); the *Versions* list restores its earlier kind. A meme only takes the house colour ramps.
+- **All slots at once** sets a choice on every slot (the same idea source, colours or model); change any slot afterwards to make it different.
+- **Draw this slot** runs only that slot with exactly its choices. Unchecking a slot leaves it out of the big run.
+- The server API is `POST /api/projects/{id}/images/redraw` with an optional `RedrawAllIn` (`fresh`, `note`, `model`, `improve`, `image_ids`, and `slots`: `SlotPlanIn` with `next`, `concept`, `pitch_hook`, `format`, `note`, `tweaks`, `model`). Everything is validated first (an unknown format or look, a stale pitch, or a model that is not signed in refuses the whole run with 422/409 before any image is touched). With no body it behaves as before: every drawn image is redrawn plainly. A picked idea or format is drawn as it is (no critique, no twist). `GET /api/image-formats?room=slot&kind=` is a middle slot's menu: its ways to draw it plus the whole meme bank.
+
+**Priorities** is the chart of what to favor or avoid: opening styles, meme formats, image kinds, colours, medium, cast and staging as chips that cycle *neutral, prefer, avoid*. It lives on the post (`Project.image_priorities`) over the persona's defaults (`Persona.default_image_priorities`, set with *Make this my default for every post*), through `GET/PUT /api/projects/{id}/image-priorities`. `images/priorities.py` is the only place it is built and applied, with no model call: an avoided opening style leaves what Auto may pitch and a preferred one is pitched first; avoided looks leave a redraw's random experiments and preferred ones come up four times as often (`remix.choose_tweaks(priorities=)`); and every pitching room is told in one line what the author prefers and does not want. A pin on one image still wins, and nothing is ever filtered down to an empty menu.
+
+**Card shortcuts:** *Next idea* sits next to *Ideas* on every card that has an untried pitch, and *Redraw options* is the caret beside *Redraw*.
+
 ## Redraw that improves
 
 `images/remix.py` is the only place a redraw experiment is defined, and every image goes through it. A redraw first critiques the current image (`brainstorm`, `ImprovementPlan`, `prompts/image_improve*.md`, effort `effort_image_improve`; the PNG is sent when the connection can show images, else its source), then draws the same idea with those fixes plus one or two experiments:

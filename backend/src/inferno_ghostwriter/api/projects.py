@@ -12,7 +12,7 @@ from sqlmodel import Session, col, select
 from inferno_ghostwriter.abtest.service import ABTestError, current_test, delete_project_data, start_ab_test
 from inferno_ghostwriter.api.deps import ServicesDep, SessionDep, image_or_404, persona_or_404, project_or_404
 from inferno_ghostwriter.api.evolution import evolution_out
-from inferno_ghostwriter.api.image_room import image_formats, image_out, image_url, room_info
+from inferno_ghostwriter.api.image_room import image_formats, image_out, image_url, room_info, slot_formats
 from inferno_ghostwriter.api.schemas import (
     ABTestSummary,
     AddImageIn,
@@ -23,6 +23,8 @@ from inferno_ghostwriter.api.schemas import (
     ImageEditIn,
     ImageFormatOut,
     ImageOut,
+    ImagePrioritiesIn,
+    ImagePrioritiesOut,
     ImageUpdate,
     InterviewAnswer,
     InterviewIn,
@@ -31,11 +33,13 @@ from inferno_ghostwriter.api.schemas import (
     OpeningCatalogOut,
     OpeningStyleOut,
     PickIn,
+    PriorityTagOut,
     ProjectCreate,
     ProjectCreated,
     ProjectOut,
     ProjectSummary,
     ProjectUpdate,
+    RedrawAllIn,
     RedrawIn,
     ReferenceHistoryOut,
     ReferenceOut,
@@ -54,7 +58,7 @@ from inferno_ghostwriter.evolution import change_stage, edit_rate, start_analysi
 from inferno_ghostwriter.experiments.models import Experiment, Scenario, default_scenarios
 from inferno_ghostwriter.experiments.service import rerun as rerun_experiment
 from inferno_ghostwriter.export import PLATFORMS, Platform, build_bundle, copy_html, linkedin_post
-from inferno_ghostwriter.images import ImageProviderError, raster
+from inferno_ghostwriter.images import ImageProviderError, priorities, raster
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.opening.styles import STYLES, suggested_by_type
 from inferno_ghostwriter.images.render import upload_to_png
@@ -607,12 +611,7 @@ async def _image_job(
     remix: bool = True,
 ) -> JobOut:
     image = image_or_404(session, image_id)
-    if model in ("codex", "gemini"):
-        cli = services.secondary.get(model)
-        if cli is None or not await cli.signed_in():
-            raise HTTPException(
-                422, f"{'ChatGPT' if model == 'codex' else 'Gemini'} is not signed in. Sign in under Settings -> Optional models."
-            )
+    await _require_model(services, model)
     project = project_or_404(session, image.project_id)
     # Detached copies: the job outlives this request's database session.
     persona = Persona.model_validate(persona_or_404(session, project.persona_id).model_dump())
@@ -687,20 +686,7 @@ async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, servi
     format, an opening style or another way to draw it (the whole meme bank is open to the opening image), and
     ``note`` steers the redraw in the author's words."""
     image = image_or_404(session, image_id)
-    for dimension, tweak_id in (body.tweaks or {}).items():
-        if dimension not in remixing.DIMENSIONS or (tweak_id != "auto" and remixing.get_tweak(dimension, tweak_id) is None):
-            raise HTTPException(422, f"Unknown tweak {dimension}={tweak_id!r}.")
-    room = room_info(image)
-    if body.format is not None:
-        allowed = {f.id for f in image_formats(room.room if room else _room_kind(image), image.kind)}
-        if body.format not in allowed:
-            raise HTTPException(422, f"This image cannot be drawn as {body.format!r}.")
-    if body.concept is not None:
-        shown = {p.index: p for p in room.pitches} if room else {}
-        if body.concept not in shown:
-            raise HTTPException(422, "This image has no such idea.")
-        if body.pitch_hook is not None and body.pitch_hook.strip() != shown[body.concept].hook.strip():
-            raise HTTPException(409, "The ideas for this image changed since you opened them. Open Ideas again to see the current ones.")
+    _check_slot_inputs(image, tweaks=body.tweaks, format=body.format, concept=body.concept, pitch_hook=body.pitch_hook)
     return await _image_job(
         services,
         session,
@@ -715,6 +701,36 @@ async def redraw_image(image_id: int, body: RedrawIn, session: SessionDep, servi
         pitch=body.pitch,
         concept_edit=body.concept_edit.model_dump() if body.concept_edit and body.concept is not None else None,
     )
+
+
+async def _require_model(services: Services, model: ImageRoute | None) -> None:
+    """An optional model may do a job's image work only while it is signed in (422 before anything starts)."""
+    if model in ("codex", "gemini"):
+        cli = services.secondary.get(model)
+        if cli is None or not await cli.signed_in():
+            raise HTTPException(
+                422, f"{'ChatGPT' if model == 'codex' else 'Gemini'} is not signed in. Sign in under Settings -> Optional models."
+            )
+
+
+def _check_slot_inputs(
+    image: ProjectImage, *, tweaks: dict[str, str] | None, format: str | None, concept: int | None, pitch_hook: str | None
+) -> None:
+    """Reject a redraw request the image's room cannot honour (422, or 409 when its ideas changed)."""
+    for dimension, tweak_id in (tweaks or {}).items():
+        if dimension not in remixing.DIMENSIONS or (tweak_id != "auto" and remixing.get_tweak(dimension, tweak_id) is None):
+            raise HTTPException(422, f"Unknown tweak {dimension}={tweak_id!r}.")
+    room = room_info(image)
+    if format is not None:
+        allowed = {f.id for f in slot_formats(room.room if room else _room_kind(image), image.kind)}
+        if format not in allowed:
+            raise HTTPException(422, f"This image cannot be drawn as {format!r}.")
+    if concept is not None:
+        shown = {p.index: p for p in room.pitches} if room else {}
+        if concept not in shown:
+            raise HTTPException(422, "This image has no such idea.")
+        if pitch_hook is not None and pitch_hook.strip() != shown[concept].hook.strip():
+            raise HTTPException(409, "The ideas for this image changed since you opened them. Open Ideas again to see the current ones.")
 
 
 def _room_kind(image: ProjectImage) -> str:
@@ -743,8 +759,8 @@ def finalist_file(image_id: int, index: int, session: SessionDep, services: Serv
 @router.get("/image-formats", response_model=list[ImageFormatOut])
 def list_image_formats(room: str = "meme", kind: str = "") -> list[ImageFormatOut]:
     """What an image's room can switch to: ``room`` is opening, meme or body (with the image's ``kind``)."""
-    if room not in ("opening", "meme", "body"):
-        raise HTTPException(422, "room is one of opening, meme, body.")
+    if room not in ("opening", "meme", "body", "slot"):
+        raise HTTPException(422, "room is one of opening, meme, body, slot.")
     return image_formats(room, kind)
 
 
@@ -830,6 +846,37 @@ async def redraw_dependents(image_id: int, session: SessionDep, services: Servic
     return JobOut(**job.model_dump())
 
 
+def _priorities_out(project: Project, persona: Persona) -> ImagePrioritiesOut:
+    return ImagePrioritiesOut(
+        tags=[PriorityTagOut(id=t.id, label=t.label, group=t.group, hint=t.hint, swatch=list(t.swatch)) for t in priorities.catalog()],
+        post=priorities.clean(project.image_priorities),
+        persona=priorities.clean(persona.default_image_priorities),
+    )
+
+
+@router.get("/projects/{project_id}/image-priorities", response_model=ImagePrioritiesOut)
+def get_image_priorities(project_id: int, session: SessionDep) -> ImagePrioritiesOut:
+    """The chart of styles, formats and looks to prefer or avoid, with this post's and the persona's choices."""
+    project = project_or_404(session, project_id)
+    return _priorities_out(project, persona_or_404(session, project.persona_id))
+
+
+@router.put("/projects/{project_id}/image-priorities", response_model=ImagePrioritiesOut)
+def set_image_priorities(project_id: int, body: ImagePrioritiesIn, session: SessionDep) -> ImagePrioritiesOut:
+    """Save the chart for this post (and, with ``save_as_default``, for the persona). Unknown tags are dropped."""
+    project = project_or_404(session, project_id)
+    persona = _writable_persona(session, project.persona_id)
+    project.image_priorities = priorities.clean(body.post)
+    session.add(project)
+    if body.save_as_default:
+        persona.default_image_priorities = priorities.clean(body.post)
+        session.add(persona)
+    session.commit()
+    session.refresh(project)
+    session.refresh(persona)
+    return _priorities_out(project, persona)
+
+
 @router.get("/remix-options", response_model=list[RemixDimensionOut])
 def remix_options() -> list[RemixDimensionOut]:
     """What Remix can change in a redraw: colors, who is in it, staging and medium (each also has "auto")."""
@@ -873,20 +920,37 @@ def opening_styles() -> OpeningCatalogOut:
 
 
 @router.post("/projects/{project_id}/images/redraw", response_model=JobOut, status_code=202)
-async def redraw_all_images(project_id: int, session: SessionDep, services: ServicesDep) -> JobOut:
-    """Redraw every image Claude drew (e.g. after changing the brand kit); uploads and old placeholders stay."""
+async def redraw_all_images(project_id: int, session: SessionDep, services: ServicesDep, body: RedrawAllIn | None = None) -> JobOut:
+    """Redraw the post's images. With no body: every image Claude drew, plainly (e.g. after changing the brand kit).
+
+    With a ``RedrawAllIn`` (Image studio): start over with all-new ideas (``fresh``), steer the run with a ``note``,
+    pick the slots to run, and give any slot its own idea, format (a meme too), look pins, note and model."""
     project = project_or_404(session, project_id)
     persona = Persona.model_validate(persona_or_404(session, project.persona_id).model_dump())
     brand_kit = dict(project.brand_kit or {})
     voice_profile = current_voice_profile(session, project.persona_id)
     markdown, title, voice = project.markdown, project.title, voice_profile.markdown if voice_profile else ""
-    drawn = [
-        (i.id, i.kind) for i in project_images(session, project_id) if i.id is not None and i.provider not in ("upload", "placeholder")
-    ]
-    before = {i.id: (i.slot_id, describe_image(i)) for i in project_images(session, project_id) if i.id is not None}
+    rows = {i.id: i for i in project_images(session, project_id) if i.id is not None}
+    # The legacy call redraws every picture as it is, with no critique and no twist.
+    plan = body or RedrawAllIn(fresh=False, improve=False)
+    own = {s.image_id: s for s in plan.slots}
+    chosen = [*own, *(i for i in plan.image_ids if i not in own)]
+    for image_id in chosen:
+        if image_id not in rows:
+            raise HTTPException(404, f"This post has no image {image_id}.")
+    if chosen:
+        targets = [rows[i] for i in rows if i in chosen]
+    else:
+        targets = [i for i in rows.values() if i.provider not in ("upload", "placeholder")]
+    drawn = [(i.id, i.kind) for i in targets if i.id is not None]
+    before = {i.id: (i.slot_id, describe_image(i)) for i in rows.values()}
     image_ids = [image_id for image_id, _ in drawn]
     if not image_ids:
         raise HTTPException(409, "This post has no drawn images to redraw.")
+    await _require_model(services, plan.model)
+    for slot in plan.slots:
+        await _require_model(services, slot.model)
+        _check_slot_inputs(rows[slot.image_id], tweaks=slot.tweaks, format=slot.format, concept=slot.concept, pitch_hook=slot.pitch_hook)
 
     async def run(ctx):  # type: ignore[no-untyped-def]
         done = 0
@@ -901,19 +965,38 @@ async def redraw_all_images(project_id: int, session: SessionDep, services: Serv
             nonlocal done
             if kind == "meme":
                 await opened.wait()
+            slot = own.get(image_id)
+            # A slot's own choice wins over the run's: a stored idea or format is drawn as it is, "next" takes the next
+            # idea, and otherwise the run either pitches all-new ideas (start over) or redraws the idea on show.
+            picked = slot is not None and (slot.concept is not None or slot.format is not None)
+            next_idea = bool(slot and slot.next and not picked)
+            pitch = plan.fresh and not picked and not next_idea
+            # Like the card's "Pitch new ideas", a new round is a rethink that pitches (a plain redraw keeps the idea on show).
+            rethink = next_idea or pitch
+            note = (slot.note if slot is not None and slot.note is not None else plan.note).strip()
+            tweaks = slot.tweaks if slot is not None else None
+            model = slot.model if slot is not None and slot.model is not None else plan.model
             try:
                 async with semaphore:
-                    redrawn[image_id] = await services.images.create(
-                        image_id,
-                        persona=persona,
-                        title=title,
-                        markdown=markdown,
-                        voice_profile=voice,
-                        redraw=True,
-                        remix=False,
-                        brand_kit=brand_kit,
-                        usage=ctx.add_usage,
-                    )
+                    with image_model(model):
+                        redrawn[image_id] = await services.images.create(
+                            image_id,
+                            persona=persona,
+                            title=title,
+                            markdown=markdown,
+                            voice_profile=voice,
+                            redraw=True,
+                            rethink=rethink,
+                            pitch=pitch,
+                            concept=slot.concept if slot is not None else None,
+                            format=slot.format if slot is not None else None,
+                            note=note,
+                            tweaks=tweaks,
+                            improve=plan.improve,
+                            remix=bool(tweaks) or (plan.improve and not plan.fresh and not picked and not rethink),
+                            brand_kit=brand_kit,
+                            usage=ctx.add_usage,
+                        )
             finally:
                 if kind == "hero":
                     opened.set()

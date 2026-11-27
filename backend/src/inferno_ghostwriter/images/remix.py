@@ -222,6 +222,7 @@ def choose_tweaks(
     count: int = 2,
     keep_palette: bool = False,
     house_only: bool = False,
+    priorities: dict[str, str] | None = None,
 ) -> list[Tweak]:
     """The experiments this redraw tries: the author's pins, then random ones that differ from the last redraws.
 
@@ -245,8 +246,17 @@ def choose_tweaks(
         pool = [t for t in TWEAKS if t.dimension == dimension and not (house_only and dimension == PALETTE and t.id not in HOUSE)]
         options = [t for t in pool if f"{dimension}:{t.id}" not in recent[:MEMORY]] or pool
         # The ghost is the house cast: it is only a random pick when the redraw is already away from it (it can return).
-        chosen.append(rng.choice(options))
+        # The author's priorities (images.priorities) drop avoided looks and make preferred ones likelier.
+        chosen.append(rng.choice(_weighted(options, priorities)))
     return chosen
+
+
+def _weighted(options: list[Tweak], priorities: dict[str, str] | None) -> list[Tweak]:
+    """``options`` without avoided looks (never all of them) and with preferred ones repeated (likelier)."""
+    if not priorities:
+        return options
+    kept = [t for t in options if priorities.get(memory_entry(t)) != "avoid"] or options
+    return [t for t in kept for _ in range(4 if priorities.get(memory_entry(t)) == "prefer" else 1)]
 
 
 def memory_entry(tweak: Tweak) -> str:

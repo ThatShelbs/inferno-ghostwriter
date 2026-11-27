@@ -36,6 +36,9 @@ import type {
   IdeaUpdate,
   IdeaWriteIn,
   ImageOut,
+  ImagePrioritiesIn,
+  ImagePrioritiesOut,
+  RedrawAllIn,
   InterviewAnswer,
   InterviewQuestionOut,
   ImageFormatOut,
@@ -91,6 +94,7 @@ export const keys = {
   project: (id: number) => ['projects', id] as const,
   imageFormats: (room: string, kind: string) => ['image-formats', room, kind] as const,
   remixOptions: ['remix-options'] as const,
+  imagePriorities: (projectId: number) => ['image-priorities', projectId] as const,
   openingStyles: ['opening-styles'] as const,
   formulaCatalog: ['formula-catalog'] as const,
   formulas: ['formulas'] as const,
@@ -644,9 +648,25 @@ export const useImageFormats = (room: string, kind: string, enabled = true) =>
     enabled,
   })
 
-/** What Remix can change in a redraw (colors, cast, staging, medium); it never changes while the app runs. */
+/** What a redraw can change (colors, cast, staging, medium); it never changes while the app runs. */
 export const useRemixOptions = (enabled = true) =>
   useQuery({ queryKey: keys.remixOptions, queryFn: () => api.get<RemixDimensionOut[]>('/api/remix-options'), staleTime: Infinity, enabled })
+
+/** The chart of styles, formats and looks to prefer or avoid, with this post's and the persona's choices. */
+export const useImagePriorities = (projectId: number, enabled = true) =>
+  useQuery({
+    queryKey: keys.imagePriorities(projectId),
+    queryFn: () => api.get<ImagePrioritiesOut>(`/api/projects/${projectId}/image-priorities`),
+    enabled,
+  })
+
+export function useSetImagePriorities(projectId: number) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: ImagePrioritiesIn) => api.put<ImagePrioritiesOut>(`/api/projects/${projectId}/image-priorities`, body),
+    onSuccess: (data) => qc.setQueryData(keys.imagePriorities(projectId), data),
+  })
+}
 
 const EMPTY_OPENING_CATALOG: OpeningCatalogOut = { styles: [], suggested_by_type: {} }
 
@@ -742,8 +762,11 @@ export function useImageMutations(projectId: number) {
       mutationFn: ({ id, index }: { id: number; index: number }) => api.post<ImageOut>(`/api/images/${id}/pick`, { index }),
       onSuccess: refresh,
     }),
-    /** Redraw every image Claude drew, e.g. after changing the brand kit. */
-    redrawAll: useMutation({ mutationFn: () => api.post<JobOut>(`/api/projects/${projectId}/images/redraw`) }),
+    /**
+     * Redraw the post's images. With no plan: every image Claude drew, as it is (e.g. after changing the brand kit).
+     * With a plan (Image studio): start over, steer with a note, and give each slot its own idea, look and model.
+     */
+    redrawAll: useMutation({ mutationFn: (plan?: RedrawAllIn) => api.post<JobOut>(`/api/projects/${projectId}/images/redraw`, plan) }),
     /** Change an image as described ("make the arrows orange"), keeping the rest of it. */
     edit: useMutation({
       mutationFn: ({ id, instruction, model }: { id: number; instruction: string; model?: ImageRoute }) =>

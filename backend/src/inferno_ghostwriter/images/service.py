@@ -30,6 +30,7 @@ from inferno_ghostwriter.experiments.models import MONTAGE_SLOT, Scenario
 from inferno_ghostwriter.experiments.models import load as load_experiment
 from inferno_ghostwriter.experiments.models import measure as measure_code
 from inferno_ghostwriter.images import board, handson, raster
+from inferno_ghostwriter.images import priorities as priorities_
 from inferno_ghostwriter.images import remix as remixing
 from inferno_ghostwriter.images.base import PLACEHOLDER_RE, Drawn, ImageProviderError, thumbnail_png
 from inferno_ghostwriter.images.body import BodyContext, BodyRoom
@@ -64,7 +65,8 @@ log = logging.getLogger(__name__)
 MAX_EDIT_NOTES = 8
 MAX_EDIT_SPEC = 20000
 STALE_PENDING = "Generation stopped before this image was made. Click Redraw to create it."
-HISTORY_FIELDS = ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits")
+# ``kind`` is kept because a body slot can become a meme (and back), so restoring a version restores what it was.
+HISTORY_FIELDS = ("file_name", "provider", "seed", "prompt", "spec", "alt", "caption", "credit", "width", "height", "edits", "kind")
 
 
 # The task that designs each kind of drawing: with image routing on, an optional model may design it, and the
@@ -158,6 +160,11 @@ def _resolved(dials: dict[str, Any], persona: Persona, brief: str) -> Any:
         return resolve(Dials(**dials), persona, brief, default_revisions=0)
     except ValueError:
         return None
+
+
+def _steer(note: str, priorities: dict[str, str] | None) -> str:
+    """The author's steer for a pitching room plus, when set, one line about the styles and looks they prioritize."""
+    return " ".join(part for part in (note, priorities_.note(priorities)) if part)
 
 
 def _formula_note(dials: dict[str, Any], persona: Persona, brief: str) -> str:
@@ -611,7 +618,16 @@ class ImageService:
             # The critique is only asked for when the redraw draws the picture on show again (it is about that picture).
             brainstorm = improve and not fresh_ideas and self._redraws_current(image)
             art, remixed = await self._remix(
-                image, art, title=title, markdown=markdown, brand_kit=brand_kit, pins=tweaks, brainstorm=brainstorm, usage=usage
+                image,
+                art,
+                title=title,
+                markdown=markdown,
+                brand_kit=brand_kit,
+                pins=tweaks,
+                brainstorm=brainstorm,
+                usage=usage,
+                as_meme=self._becomes_meme(image, format),
+                priorities=self._priorities(image, persona),
             )
         # Each new version rolls again for GPT painting, so a redraw can switch between painting and drawing.
         with raster.paint_round(len(image.history or [])):
@@ -658,16 +674,19 @@ class ImageService:
         pins: dict[str, str] | None,
         brainstorm: bool,
         usage: UsageSink | None,
+        as_meme: bool = False,
+        priorities: dict[str, str] | None = None,
     ) -> tuple[ArtDirection, dict[str, Any]]:
         """Critique the current image and choose this redraw's twist; returns the art direction carrying both."""
         previous = dict(image.remix or {})
-        kind = image.kind
+        kind = "meme" if as_meme else image.kind
         chosen = remixing.choose_tweaks(
-            remix_dimensions(image),
+            remixing.KIND_DIMENSIONS["meme"] if as_meme else remix_dimensions(image),
             recent=[str(e) for e in previous.get("recent", [])],
             pinned=remixing.pins_from(pins),
             keep_palette=bool(brand_palette(brand_kit)),
             house_only=kind in ("hero", "meme"),
+            priorities=priorities,
         )
         plan = None
         if brainstorm and str(previous.get("pending_fix") or "").strip():
@@ -714,12 +733,13 @@ class ImageService:
         kind = image.kind
         seed = random.randrange(1 << 30)
         spec = image.spec
+        prio = self._priorities(image, persona)
         meme_format = format if format is not None and get_format(format) else None
         if kind == "hero":
             opening_style = format if format in OPENING_STYLES else None
             if format is not None and opening_style is None and meme_format is None:
                 raise ImageProviderError(f"Unknown opening style or meme format: {format}")
-            context = self._opening_context(image, persona, title, markdown, voice_profile, note=note, seed=seed)
+            context = self._opening_context(image, persona, title, markdown, voice_profile, note=note, seed=seed, priorities=prio)
             result = await self.opening.make(
                 spec if load_opening_state(spec) else "",
                 context,
@@ -733,10 +753,18 @@ class ImageService:
                 usage=usage,
             )
             return result, {}
+        if self._becomes_meme(image, format):
+            # A middle slot drawn as a meme (an author's choice from Image studio): the slot keeps its place and
+            # placeholder, only its kind changes, so every later redraw uses the meme room.
+            post = self._meme_context(
+                image, persona, title, markdown, voice_profile, position="body", note=note, seed=seed, priorities=prio
+            )
+            meme = await self.memes.make("", post, art, redraw=False, rethink=False, meme_format=meme_format, pitch=False, usage=usage)
+            return meme, {"kind": "meme", "ideas": {}, "builds_on": ""}
         if kind == "meme":
             if format is not None and meme_format is None:
                 raise ImageProviderError(f"Unknown meme format: {format}")
-            post = self._meme_context(image, persona, title, markdown, voice_profile, note=note, seed=seed)
+            post = self._meme_context(image, persona, title, markdown, voice_profile, note=note, seed=seed, priorities=prio)
             meme = await self.memes.make(
                 spec, post, art, redraw=redraw, rethink=rethink, meme_format=meme_format, concept_index=concept, pitch=pitch, usage=usage
             )
@@ -744,7 +772,24 @@ class ImageService:
         return await self._draw_body(
             image, art, persona=persona, title=title, markdown=markdown, voice_profile=voice_profile,
             redraw=redraw, rethink=rethink, concept=concept, format=format, note=note, pitch=pitch, seed=seed, usage=usage,
+            priorities=prio,
         )  # fmt: skip
+
+    def _priorities(self, image: ProjectImage, persona: Persona) -> dict[str, str]:
+        """What this post's author wants more or less of: the post's own chart over the persona's defaults."""
+        with Session(self.engine) as session:
+            project = session.get(Project, image.project_id)
+        return priorities_.merge(getattr(persona, "default_image_priorities", None), project.image_priorities if project else None)
+
+    @staticmethod
+    def _becomes_meme(image: ProjectImage, format: str | None) -> bool:
+        """True when a middle slot is asked to be drawn in a meme format (the opener and closer have their own rooms)."""
+        return (
+            format is not None
+            and image.kind not in ("hero", "meme", "hands_on_viz")
+            and get_format(format) is not None
+            and image.slot_id != MONTAGE_SLOT
+        )
 
     async def _draw_body(
         self,
@@ -763,8 +808,11 @@ class ImageService:
         pitch: bool,
         seed: int,
         usage: UsageSink | None,
+        priorities: dict[str, str] | None = None,
     ) -> tuple[Drawn, dict[str, Any]]:
-        ctx = self._body_context(image, art, title=title, markdown=markdown, voice_profile=voice_profile, note=note, seed=seed)
+        ctx = self._body_context(
+            image, art, title=title, markdown=markdown, voice_profile=voice_profile, note=note, seed=seed, priorities=priorities
+        )
         ideas = dict(image.ideas or {})
         stored = ideas if ideas.get("concepts") and ideas.get("brief") == ctx.brief else {}
         concepts: list[dict[str, Any]] = list(stored.get("concepts") or [])
@@ -885,8 +933,18 @@ class ImageService:
         return variation
 
     def _body_context(
-        self, image: ProjectImage, art: ArtDirection, *, title: str, markdown: str, voice_profile: str, note: str, seed: int
+        self,
+        image: ProjectImage,
+        art: ArtDirection,
+        *,
+        title: str,
+        markdown: str,
+        voice_profile: str,
+        note: str,
+        seed: int,
+        priorities: dict[str, str] | None = None,
     ) -> BodyContext:
+        note = _steer(note, priorities)
         return BodyContext(
             kind=image.kind,
             slot_id=image.slot_id,
@@ -1096,14 +1154,16 @@ class ImageService:
         position: str = "closing",
         note: str = "",
         seed: int | None = None,
+        priorities: dict[str, str] | None = None,
     ) -> MemeContext:
+        note = _steer(note, priorities)
         plan, dials, brief, _ = self._post_info(image.project_id)
         humor = dials.get("humor")
         return MemeContext(
             title=title,
             markdown=markdown,
             voice_profile=voice_profile,
-            brief=(image.prompt or image.purpose) if position == "closing" else "",
+            brief=(image.prompt or image.purpose) if position in ("closing", "body") else "",
             joke=str(plan.get("joke") or "") if position == "closing" else "",
             callbacks=plan_callbacks(plan),
             humor=int(humor) if humor is not None else persona.default_humor,
@@ -1126,6 +1186,7 @@ class ImageService:
         *,
         note: str = "",
         seed: int | None = None,
+        priorities: dict[str, str] | None = None,
     ) -> OpeningContext:
         plan, dials, brief, pinned = self._post_info(image.project_id)
         resolved = _resolved(dials, persona, brief)
@@ -1144,12 +1205,14 @@ class ImageService:
             titles=tuple(t for t in [*pinned, *(plan.get("title_options") or [])] if t and t != title)[:4],
             humor=humor,
             style=resolved.opening_style if resolved is not None else "auto",
-            note=" ".join(n for n in (dial_note, note) if n),
-            suggested=tuple(resolved.opening_suggested) if resolved is not None else (),
-            eligible=tuple(resolved.opening_eligible) if resolved is not None else (),
+            note=" ".join(n for n in (dial_note, _steer(note, priorities)) if n),
+            suggested=tuple(priorities_.order_styles(resolved.opening_suggested, priorities)) if resolved is not None else (),
+            eligible=tuple(priorities_.order_styles(resolved.opening_eligible, priorities)) if resolved is not None else (),
             formula=formula,
             recent_styles=self._recent_opening_styles(persona, image.project_id),
-            meme_context=self._meme_context(image, persona, title, markdown, voice_profile, position="opening", note=note, seed=seed),
+            meme_context=self._meme_context(
+                image, persona, title, markdown, voice_profile, position="opening", note=note, seed=seed, priorities=priorities
+            ),
             recent_schemes=self._recent_schemes(persona, image.project_id),
             seed=seed,
         )

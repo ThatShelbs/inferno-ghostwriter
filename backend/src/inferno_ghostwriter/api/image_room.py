@@ -68,7 +68,8 @@ def image_out(image: ProjectImage, markdown: str | None = None) -> ImageOut:
         remix=remix_info(image),
         remix_dimensions=list(remix_dimensions(image)),
         hands_on=hands_on_info(image, markdown),
-        kind_label=kinds.label(image.kind),
+        # Only the last slot is the closing meme; a meme in the middle of the post (made in Image studio) is just a meme.
+        kind_label="Meme" if image.kind == "meme" and image.slot_id != "meme" else kinds.label(image.kind),
     )
 
 
@@ -320,4 +321,12 @@ def image_formats(room: str, kind: str = "") -> list[ImageFormatOut]:
         ]
         return styles + memes
     kinds = KIND_OPTIONS.get(kind, tuple(KIND_LABELS))
-    return [ImageFormatOut(id=k, label=KIND_LABELS.get(k, k), group="Ways to draw it", when_to_use=KIND_USE.get(k, "")) for k in kinds]
+    ways = [ImageFormatOut(id=k, label=KIND_LABELS.get(k, k), group="Ways to draw it", when_to_use=KIND_USE.get(k, "")) for k in kinds]
+    # "slot" is a middle slot in Image studio: the ways to draw it plus the whole meme bank (it becomes a meme).
+    return ways + memes if room == "slot" and kind != "hands_on_viz" else ways
+
+
+def slot_formats(room: str, kind: str) -> list[ImageFormatOut]:
+    """Everything one slot of the post can be drawn as: the opener its styles and memes, the closer memes, a middle
+    image its own ways plus every meme."""
+    return image_formats("slot" if room == "body" else room, kind)
