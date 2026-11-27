@@ -63,13 +63,21 @@ def _next_number(slots: list[ImageSlot], markdown: str) -> int:
     return max(used | {1}) + 1
 
 
+_LIBRARY_RE = re.compile(r"\b(?:" + "|".join(sorted(PLOT_LIBRARIES)) + r")\b", re.IGNORECASE)
+
+
+def _neutral(text: str) -> str:
+    """Drop plotting-library names from a brief: a plain chart is drawn as Vega-Lite whatever the brief asked for."""
+    return _LIBRARY_RE.sub("a chart library", text)
+
+
 def settle_slots(markdown: str, slots: list[ImageSlot], level: str) -> tuple[str, list[ImageSlot]]:
     """Make the slots and the post agree: ``hands_on_viz`` only where a code example sits right above the placeholder."""
     # 1. A hands-on slot with no code above it (or when the dial says none) is still a chart: the image just is not code-made.
     settled: list[ImageSlot] = []
     for slot in slots:
         if slot.kind == KIND and (level == "none" or code_before(markdown, slot.slot_id) is None):
-            slot = slot.model_copy(update={"kind": "chart"})
+            slot = slot.model_copy(update={"kind": "chart", "brief": _neutral(slot.brief), "purpose": _neutral(slot.purpose)})
         settled.append(slot)
     slots = settled
     if level != "lots":

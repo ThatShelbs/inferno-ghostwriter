@@ -94,20 +94,13 @@ def model_label(model: str) -> str:
 
 
 def tool_label(provider: str, model: str) -> str:
+    """The credit names who designed the image, never the drawing tool (a tool name can contradict the post's code)."""
     claude = model_label(model)
     return {
-        "claude-svg": f"{claude} (SVG)",
-        "vega-lite": f"{claude} + Vega-Lite",
-        "claude-meme": f"{claude} (meme)",
-        "claude-opening": f"{claude} (layout)",
-        "claude-scene": f"{claude} (scene)",
-        "claude-art": f"{claude} (generative art)",
-        "claude-diagram": f"{claude} (diagram)",
         raster.PROVIDER: raster.TOOL_LABEL,
-        handson.PROVIDER: f"{claude} ({handson.TOOL_LABEL})",
         handson.MONTAGE_PROVIDER: "Inferno Ghostwriter",
         "placeholder": "Inferno Ghostwriter",
-    }.get(provider, provider)
+    }.get(provider, claude)
 
 
 def credit_line(persona: Persona, provider: str, model: str = "claude-opus-5-5") -> str:

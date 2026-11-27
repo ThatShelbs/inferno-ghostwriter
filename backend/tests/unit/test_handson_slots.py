@@ -31,6 +31,14 @@ def test_the_none_level_turns_every_hands_on_slot_into_a_chart() -> None:
     assert [s.kind for s in slots if s.slot_id == "img2"] == ["chart"]
 
 
+def test_a_downgraded_slot_no_longer_names_a_plotting_library() -> None:
+    post = f"## A\n\n{PLOT}\n\n{{{{image:img2}}}}\n"
+    drawn = ImageSlot(slot_id="img2", kind="hands_on_viz", section_index=0, purpose="Matplotlib histogram", brief="Draw it with matplotlib")
+    _, slots = settle_slots(post, [HERO, drawn, MEME], "none")
+    out = next(s for s in slots if s.slot_id == "img2")
+    assert "matplotlib" not in (out.brief + out.purpose).lower()
+
+
 def test_lots_gives_each_plotting_example_a_picture_after_it() -> None:
     post = f"# T\n\n## A\n\n{PLOT}\n\nMore.\n\n## B\n\n{PLAIN}\n\n{PLOT}\n"
     text, slots = settle_slots(post, [HERO, MEME], "lots")

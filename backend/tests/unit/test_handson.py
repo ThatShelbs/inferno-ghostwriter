@@ -139,7 +139,7 @@ def test_the_image_service_makes_the_picture_from_the_code_when_running_code_is_
     image = create(services, persona, image_id)
     assert image.status == "ready", image.error
     assert image.provider == PROVIDER and image.file_name and (services.storage.image_dir(image.project_id) / image.file_name).exists()
-    assert image.credit.startswith("Author: Shelby Temple; Made with Claude Opus 5.5") and "code run on this computer" in image.credit
+    assert image.credit.startswith("Author: Shelby Temple; Made with Claude Opus 5.5")
     assert load_spec(image.spec)["code_hash"] == code_hash(CODE)
 
 
