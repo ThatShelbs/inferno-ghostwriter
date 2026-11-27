@@ -453,14 +453,17 @@ class ImageService:
             },
         )
 
-    def set_words(self, image_id: int, words: dict[str, str], *, persona: Persona, brand_kit: dict[str, Any] | None = None) -> ProjectImage:
-        """Retype an image's words (a meme, or a code-drawn opening image) and draw it again without asking Claude.
+    async def set_words(
+        self, image_id: int, words: dict[str, str], *, persona: Persona, brand_kit: dict[str, Any] | None = None
+    ) -> ProjectImage:
+        """Retype an image's words (a meme, or a code-drawn opening image) and draw it again without asking Claude (a
+        meme GPT painted is painted again with the new words).
 
         Raises ImageProviderError when the image has no words to retype or cannot be drawn."""
         image = self._get(image_id)
         art = self._art_direction(brand_kit, persona, "")
         if is_meme(image):
-            meme = self.memes.reword(meme_spec(image), words, art)
+            meme = await self.memes.reword(meme_spec(image), words, art, current_png=self._current_png(image))
             drawn = self.opening.with_meme(image.spec, meme) if image.kind == "hero" else meme
         elif image.kind == "hero":
             drawn = self.opening.reword(image.spec, words, art)
@@ -559,20 +562,22 @@ class ImageService:
             art, remixed = await self._remix(
                 image, art, title=title, markdown=markdown, brand_kit=brand_kit, pins=tweaks, brainstorm=improve and not picked, usage=usage
             )
-        drawn, extra = await self._draw(
-            image,
-            art,
-            persona=persona,
-            title=title,
-            markdown=markdown,
-            voice_profile=voice_profile,
-            redraw=redraw,
-            rethink=rethink,
-            concept=concept,
-            format=format,
-            note=note,
-            usage=usage,
-        )
+        # Each new version rolls again for GPT painting, so a redraw can switch between painting and drawing.
+        with raster.paint_round(len(image.history or [])):
+            drawn, extra = await self._draw(
+                image,
+                art,
+                persona=persona,
+                title=title,
+                markdown=markdown,
+                voice_profile=voice_profile,
+                redraw=redraw,
+                rethink=rethink,
+                concept=concept,
+                format=format,
+                note=note,
+                usage=usage,
+            )
         updates = {**self._result(image, drawn, persona), **extra}
         if drawn.finalists:
             updates["finalists"] = [self._finalist(image, f, extra.get("ideas")) for f in drawn.finalists]
@@ -810,7 +815,8 @@ class ImageService:
             return self._result(image, await self.body.repaint(image.spec, instruction, current, usage), persona)
         art = self._art_direction(brand_kit, persona, "")
         if image.kind == "meme" and load_state(image.spec):
-            return self._result(image, await self.memes.edit(image.spec, instruction, art, usage=usage), persona)
+            meme = await self.memes.edit(image.spec, instruction, art, usage=usage, current_png=self._current_png(image))
+            return self._result(image, meme, persona)
         if image.kind == "hero" and load_opening_state(image.spec):
             with Session(self.engine) as session:
                 project = session.get(Project, image.project_id)

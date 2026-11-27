@@ -417,15 +417,23 @@ class OpeningRoom:
         concepts = load_concepts(state)
         scratch = [json.loads(json.dumps(state)) for _ in picks]
         options: list[list[Any]] = []
-        metaphors = [i for i in order if concepts[i].style == FALLBACK and not ruled_out(state["concepts"][i])]
-        if metaphors and await raster.use_native(self.llm, self.settings, f"opening:{ctx.title}"):
-            # GPT generates the opener from the visual-metaphor pitches instead of Claude drawing it: the same number
-            # of candidates, all native (the judge picks among them).
-            chosen = [metaphors[k % len(metaphors)] for k in range(len(picks))]
+        # GPT may paint the opener from its visual-metaphor and data-art pitches instead of code drawing them; each
+        # style rolls on its own share (``native_share``, ``art_share``). A painted opener has the same number of
+        # candidates, all painted (the judge picks among them).
+        paint_styles: set[str] = set()
+        rolls: tuple[tuple[str, raster.PaintKind, str], ...] = ((FALLBACK, "illustration", ""), ("data_art", "data_art", ":art"))
+        for style_id, kind, seed in rolls:
+            if any(concepts[i].style == style_id and not ruled_out(state["concepts"][i]) for i in order) and await raster.use_native(
+                self.llm, self.settings, f"opening:{ctx.title}{seed}", kind
+            ):
+                paint_styles.add(style_id)
+        paintable = [i for i in order if concepts[i].style in paint_styles and not ruled_out(state["concepts"][i])]
+        if paintable:
+            chosen = [paintable[k % len(paintable)] for k in range(len(picks))]
             made = await asyncio.gather(*(self._paint(concepts[i], ctx, art, sch, usage=usage) for i in chosen))
             options = [[i, b, json.loads(json.dumps(state))] for i, b in zip(chosen, made, strict=True) if b is not None]
             tried.update(chosen)
-        if not options:  # drawn slot, or generation failed: Claude draws the same pitches
+        if not options:  # drawn slot, or generation failed: code draws the same pitches
             results = await asyncio.gather(
                 *(self._build(concepts[i], scratch[k], ctx, art, sch, redraw=False, usage=usage) for k, i in enumerate(picks))
             )
@@ -567,7 +575,7 @@ class OpeningRoom:
             f"<instruction>\n{instruction.strip()}\n</instruction>\n"
         )
         if style.builder == "meme":
-            meme = await self.memes.edit(str(state.get("meme") or ""), instruction, art, usage=usage)
+            meme = await self.memes.edit(str(state.get("meme") or ""), instruction, art, usage=usage, current_png=current)
             return self._from_meme(state, meme)
         concept = self._chosen_concept(state)
         if state.get("medium") == "raster":
@@ -842,7 +850,7 @@ class OpeningRoom:
     ) -> _Built | None:
         style = BY_ID.get(concept.style) or BY_ID[FALLBACK]
         sch = sch or scheme_of(state, art.palette)
-        if redraw and state.get("medium") == "raster" and style.id == FALLBACK:
+        if redraw and state.get("medium") == "raster" and style.id in (FALLBACK, "data_art"):
             # A painted opener is painted again (with the redraw's twist); Claude draws it only if painting is off.
             painted = await self._paint(concept, ctx, art, sch, prompt=str(state.get("prompt") or ""), note=variation_for(art), usage=usage)
             if painted is not None:
@@ -878,11 +886,16 @@ class OpeningRoom:
     ) -> _Built | None:
         """A painted opener from GPT image generation, or None when painting is off or fails. ``prompt`` repaints a
         stored painting; ``note`` with ``current`` changes that picture, ``note`` alone is a redraw's twist."""
+        is_art = concept.style == "data_art"
+        lead = f"The opening image and thumbnail of a technical blog post titled '{ctx.title}'."
         base = prompt or raster.prompt_for(
-            f"The opening image and thumbnail of a technical blog post titled '{ctx.title}'. A visual metaphor: {concept.concept}",
+            f"{lead} Abstract data art; its idea: {concept.concept} {concept.content}".strip()
+            if is_art
+            else f"{lead} A visual metaphor: {concept.concept}",
             scheme=sch,
             palette=art.palette,
-            extra=f"Visual style: {art.visual_style}" if art.visual_style else "",
+            extra=f"Visual style: {art.visual_style}" if art.visual_style and not is_art else "",
+            rules=raster.ART_RULES if is_art else raster.RULES,
         )
         text, shown = base, [art.reference] if art.reference is not None else None
         if note.strip() and current is not None:
@@ -895,8 +908,10 @@ class OpeningRoom:
         png = await raster.paint(self.llm, text, size=(1600, 900), images=shown, usage=usage)
         if png is None:
             return None
-        state = {"style": FALLBACK, "template": "", "svg": None, "build": None, "medium": "raster", "prompt": base}
-        return _Built(png, 1600, 900, raster.PROVIDER, concept.reader_takeaway or concept.concept, "", state)
+        style = "data_art" if is_art else FALLBACK
+        state = {"style": style, "template": "", "svg": None, "build": None, "medium": "raster", "prompt": base}
+        alt = "Abstract generative data art in the post's colors." if is_art else concept.reader_takeaway or concept.concept
+        return _Built(png, 1600, 900, raster.PROVIDER, alt, "", state)
 
     async def _build_art(
         self,
@@ -1163,7 +1178,7 @@ class OpeningRoom:
     def _finish(self, state: dict[str, Any], built: _Built) -> OpeningResult:
         if "art" not in built.state:
             state.pop("art", None)
-        if built.provider != raster.PROVIDER:
+        if built.state.get("medium") != "raster":  # a painted opening meme keeps its painting in the meme state
             state.pop("medium", None)
             state.pop("prompt", None)
         state.update(built.state)

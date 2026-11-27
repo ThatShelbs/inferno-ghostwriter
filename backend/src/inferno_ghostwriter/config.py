@@ -48,7 +48,7 @@ class ImageRouting(BaseModel):
     """Which model does each kind of image work. ``auto`` picks by fit among the signed-in optional models and
     falls back to Claude: pitches (text) and JSON specs (charts, diagram/template fills, art settings, meme
     restages) go to GPT or Gemini, the vision judge to GPT (it can see the pictures), and hand-drawn SVG
-    (editorial, illustration, icon, screenshot) stays with Claude while GPT paints a raster rival for the judge."""
+    (editorial, illustration, icon, screenshot) stays with Claude unless GPT paints the slot (the shares below)."""
 
     pitch: ImageRoute = "auto"
     design: ImageRoute = "auto"
@@ -56,10 +56,15 @@ class ImageRouting(BaseModel):
     judge: ImageRoute = "auto"
     # Master switch for GPT's own image generation (Codex only).
     raster: bool = True
-    # With GPT signed in and ``raster`` on, this share of the eligible images (openers' visual metaphors and
-    # illustrations) is generated natively by GPT instead of drawn by Claude; the rest stay Claude's. Chosen per
-    # slot by a stable hash, never both ways for one slot. 0 = never, 1 = every eligible image.
-    native_share: float = Field(default=0.5, ge=0, le=1)
+    # With GPT signed in and ``raster`` on, these shares of the eligible images are generated natively by GPT
+    # instead of drawn by code from Claude's design (``images/raster.use_native``). Chosen per slot by a stable hash
+    # that changes with each redraw; never both ways for one candidate. 0 = never, 1 = every eligible image.
+    # Illustrations, icons and the opener's visual metaphors:
+    native_share: float = Field(default=0.6, ge=0, le=1)
+    # Closing and opening memes in famous, comic and caption formats (chart and artifact memes stay code-drawn):
+    meme_share: float = Field(default=0.8, ge=0, le=1)
+    # Abstract data art openers:
+    art_share: float = Field(default=0.8, ge=0, le=1)
 
 
 class SecondarySettings(BaseModel):

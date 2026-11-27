@@ -230,7 +230,9 @@ def test_image_routing_and_quality_are_saved_field_by_field(client: TestClient, 
         "svg": "auto",
         "judge": "auto",
         "raster": True,
-        "native_share": 0.5,
+        "native_share": 0.6,
+        "meme_share": 0.8,
+        "art_share": 0.8,
     }
     assert out["image_quality"] == "lean"
     client.put("/api/settings", json={"secondary": {"images": {"svg": "codex"}}})
