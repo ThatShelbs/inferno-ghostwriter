@@ -95,8 +95,8 @@ def test_full_post_flow(client: TestClient, sample_docx: bytes, fake_llm: FakeLL
     assert kinds == ["hero", "diagram", "chart", "meme"]
     assert all(img["status"] == "ready" and img["url"] for img in project["images"])
     assert all(img["credit"].startswith("Author: Shelby Temple") for img in project["images"])
-    assert project["images"][0]["credit"] == "Author: Shelby Temple; Made with Claude Opus 5.5 (SVG)"
-    assert project["images"][2]["credit"].endswith("Claude Opus 5.5 + Vega-Lite")
+    assert project["images"][0]["credit"] == "Author: Shelby Temple; Made with Claude Opus 5.5"
+    assert project["images"][2]["credit"].endswith("Claude Opus 5.5")
     assert [img["provider"] for img in project["images"][:3]] == ["claude-svg", "claude-diagram", "vega-lite"]
     # The meme came from its room: six pitches, three drawn finalists to choose from, and three ideas left.
     meme = project["images"][3]

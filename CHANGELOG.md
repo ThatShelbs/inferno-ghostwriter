@@ -6,6 +6,7 @@ All notable changes to Inferno Ghostwriter (called Proseferno before 0.2) are do
 
 ### Changed
 
+- **Image credits name only the model** ("Made with Claude Opus 5.5"), not the drawing tool. A chart credited "+ Vega-Lite" could sit under a post whose code used matplotlib; a hands-on slot that falls back to a plain chart also no longer carries a brief that names another plotting library.
 - **Up to 22 images per post.** Room for an opener, a closing meme and a top-20 list in between. The Images sliders now go to 22 (they stopped at 12).
 
 ### Fixed

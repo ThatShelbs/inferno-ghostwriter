@@ -193,9 +193,9 @@ Each post has its own image brand kit (`Project.brand_kit`): an image style, a p
 
 Each image gets a credit from the persona's template (default `Author: {name}; Made with {tool}`), where `{tool}` names the Claude model that designed it:
 
-> The saddest pie; Author: Shelby Temple; Made with Claude Opus 5.5 (SVG)
+> The saddest pie; Author: Shelby Temple; Made with Claude Opus 5.5
 
-Charts read "Made with Claude Opus 5.5 + Vega-Lite", memes "(meme)", code-laid-out images "(layout)". Captions never name another tool as the image's maker. You can edit any caption, credit or alt text. Captions and credits live only on the image; caption lines the writer puts in the post body are removed.
+Credits name only the model, never the drawing tool (no "(SVG)" or "+ Vega-Lite"), so they cannot contradict the code a post shows. Captions never name another tool as the image's maker. You can edit any caption, credit or alt text. Captions and credits live only on the image; caption lines the writer puts in the post body are removed.
 
 ## When an image fails
 
